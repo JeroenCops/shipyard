@@ -6,8 +6,8 @@ use super::mixed::Mixed;
 use super::par_iter::ParIter;
 use super::tight::Tight;
 use crate::entity_id::EntityId;
-use crate::sparse_set::SparseSet;
 use crate::type_id::TypeId;
+use alloc::vec::Vec;
 use core::ptr;
 
 const ACCESS_FACTOR: usize = 3;
@@ -28,61 +28,67 @@ pub trait IntoIter {
 
     /// Returns an iterator over `SparseSet`.
     ///
-    /// Yields [`Mut`] for mutable components.  
+    /// Yields [`Mut`] for tracked mutable components.  
     /// It `deref`s to the component and will flag mutation.  
-    /// [`fast_iter`] can be used if you want an iterator yielding `&mut T`, it has limitations however.
     ///
     /// ### Example
     /// ```
-    /// use shipyard::{EntitiesViewMut, IntoIter, ViewMut, World};
+    /// use shipyard::{Component, EntitiesViewMut, IntoIter, ViewMut, World};
+    ///
+    /// #[derive(Component, Clone, Copy)]
+    /// struct U32(u32);
+    ///
+    /// #[derive(Component)]
+    /// struct USIZE(usize);
     ///
     /// let world = World::new();
     ///
-    /// let (mut entities, mut usizes, mut u32s) = world.borrow::<(EntitiesViewMut, ViewMut<usize>, ViewMut<u32>)>().unwrap();
+    /// let (mut entities, mut usizes, mut u32s) = world.borrow::<(EntitiesViewMut, ViewMut<USIZE>, ViewMut<U32>)>().unwrap();
     ///
-    /// entities.add_entity((&mut usizes, &mut u32s), (0usize, 1u32));
-    /// entities.add_entity((&mut usizes, &mut u32s), (2usize, 3u32));
+    /// entities.add_entity((&mut usizes, &mut u32s), (USIZE(0), U32(1)));
+    /// entities.add_entity((&mut usizes, &mut u32s), (USIZE(2), U32(3)));
     ///
     /// (&mut usizes, &u32s).iter().for_each(|(mut x, &y)| {
-    ///     *x += y as usize;
+    ///     x.0 += y.0 as usize;
     /// });
     /// ```
     /// [`Mut`]: crate::Mut
-    /// [`fast_iter`]: crate::IntoFastIter
     fn iter(self) -> Self::IntoIter;
     /// Returns an iterator over `SparseSet`, its order is based on `D`.
     ///
-    /// Returns [`Mut`] when yielding mutable components.  
+    /// Returns [`Mut`] when yielding tracked mutable components.  
     /// It `deref`s to the component and will flag mutation.  
-    /// [`fast_iter_by`] can be used if you want an iterator yielding `&mut T`, it has limitations however.
     ///
     /// [`Mut`]: crate::Mut
-    /// [`fast_iter_by`]: crate::IntoFastIter
     fn iter_by<D: 'static>(self) -> Self::IntoIter;
     /// Returns a parallel iterator over `SparseSet`.
     ///
-    /// Yields [`Mut`] for mutable components.  
+    /// Yields [`Mut`] for tracked mutable components.  
     /// It `deref`s to the component and will flag mutation.  
-    /// [`fast_par_iter`] can be used if you want an iterator yielding `&mut T`, it has limitations however.
     ///
     /// ### Example
     /// ```
     /// use rayon::prelude::ParallelIterator;
-    /// use shipyard::{EntitiesViewMut, IntoIter, ViewMut, World};
+    /// use shipyard::{Component, EntitiesViewMut, IntoIter, ViewMut, World};
+    ///
+    /// #[derive(Component, Clone, Copy)]
+    /// struct U32(u32);
+    ///
+    /// #[derive(Component)]
+    /// struct USIZE(usize);
     ///
     /// let world = World::new();
     ///
-    /// let (mut entities, mut usizes, mut u32s) = world.borrow::<(EntitiesViewMut, ViewMut<usize>, ViewMut<u32>)>().unwrap();
+    /// let (mut entities, mut usizes, mut u32s) = world.borrow::<(EntitiesViewMut, ViewMut<USIZE>, ViewMut<U32>)>().unwrap();
     ///
-    /// entities.add_entity((&mut usizes, &mut u32s), (0usize, 1u32));
-    /// entities.add_entity((&mut usizes, &mut u32s), (2usize, 3u32));
+    /// entities.add_entity((&mut usizes, &mut u32s), (USIZE(0), U32(1)));
+    /// entities.add_entity((&mut usizes, &mut u32s), (USIZE(2), U32(3)));
     ///
     /// (&mut usizes, &u32s).par_iter().for_each(|(mut x, &y)| {
-    ///     *x += y as usize;
+    ///     x.0 += y.0 as usize;
     /// });
     /// ```
     /// [`Mut`]: crate::Mut
-    /// [`fast_par_iter`]: crate::IntoFastIter
     #[cfg(feature = "parallel")]
     #[cfg_attr(docsrs, doc(cfg(feature = "parallel")))]
     fn par_iter(self) -> Self::IntoParIter;
@@ -90,7 +96,7 @@ pub trait IntoIter {
 
 impl<T: IntoAbstract> IntoIter for T
 where
-    <T::AbsView as AbstractMut>::Index: Clone,
+    <T::AbsView as AbstractMut>::Index: From<usize> + Clone,
 {
     type IntoIter = Iter<T::AbsView>;
     #[cfg(feature = "parallel")]
@@ -98,21 +104,26 @@ where
 
     #[inline]
     fn iter(self) -> Self::IntoIter {
-        match self.len() {
-            Some((len, true)) => Iter::Tight(Tight {
+        let is_exact = !(self.is_not() || self.is_or() || self.is_tracking());
+        match (self.len(), is_exact) {
+            (Some(len), true) => Iter::Tight(Tight {
                 current: 0,
                 end: len,
                 storage: self.into_abstract(),
             }),
-            Some((len, false)) => Iter::Mixed(Mixed {
-                indices: self.dense(),
-                storage: self.into_abstract(),
-                current: 0,
-                end: len,
-                mask: 0,
-                last_id: EntityId::dead(),
-            }),
-            None => Iter::Tight(Tight {
+            (Some(len), false) => {
+                let slice = unsafe { core::slice::from_raw_parts(self.dense(), len) };
+
+                Iter::Mixed(Mixed {
+                    rev_next_storage: self.other_dense(),
+                    indices: slice.iter(),
+                    storage: self.into_abstract(),
+                    count: 0,
+                    mask: 0,
+                    last_id: EntityId::dead(),
+                })
+            }
+            (None, _) => Iter::Tight(Tight {
                 current: 0,
                 end: 0,
                 storage: self.into_abstract(),
@@ -140,21 +151,26 @@ where
 
     #[inline]
     fn iter(self) -> Self::IntoIter {
-        match self.0.len() {
-            Some((len, true)) => Iter::Tight(Tight {
+        let is_exact = !(self.0.is_not() || self.0.is_or() || self.0.is_tracking());
+        match (self.0.len(), is_exact) {
+            (Some(len), true) => Iter::Tight(Tight {
                 current: 0,
                 end: len,
                 storage: (self.0.into_abstract(),),
             }),
-            Some((len, false)) => Iter::Mixed(Mixed {
-                current: 0,
-                end: len,
-                indices: self.0.dense(),
-                mask: 0,
-                last_id: EntityId::dead(),
-                storage: (self.0.into_abstract(),),
-            }),
-            None => Iter::Tight(Tight {
+            (Some(len), false) => {
+                let slice = unsafe { core::slice::from_raw_parts(self.0.dense(), len) };
+
+                Iter::Mixed(Mixed {
+                    rev_next_storage: self.0.other_dense(),
+                    indices: slice.iter(),
+                    storage: (self.0.into_abstract(),),
+                    count: 0,
+                    mask: 0,
+                    last_id: EntityId::dead(),
+                })
+            }
+            (None, _) => Iter::Tight(Tight {
                 current: 0,
                 end: 0,
                 storage: (self.0.into_abstract(),),
@@ -187,37 +203,41 @@ macro_rules! impl_into_iter {
                 let mut mask: u16 = 0;
                 let mut factored_len = core::usize::MAX;
 
-                if let Some((len, is_exact)) = self.$index1.len() {
-                    smallest = len;
-                    smallest_dense = self.$index1.dense();
+                if !self.$index1.is_or() && !self.$index1.is_not() {
+                    if let Some(len) = self.$index1.len() {
+                        smallest = len;
+                        smallest_dense = self.$index1.dense();
 
-                    if is_exact {
-                        factored_len = len + len * (type_ids.len() - 1) * ACCESS_FACTOR;
-                        mask = 1 << $index1;
-                    } else {
-                        factored_len = len * type_ids.len() * ACCESS_FACTOR;
+                        if !self.$index1.is_tracking() {
+                            factored_len = len + len * (type_ids.len() - 1) * ACCESS_FACTOR;
+                            mask = 1 << $index1;
+                        } else {
+                            factored_len = len * type_ids.len() * ACCESS_FACTOR;
+                        }
                     }
                 }
 
                 $(
-                    if let Some((len, is_exact)) = self.$index.len() {
-                        if is_exact {
-                            let factor = len + len * (type_ids.len() - 1) * ACCESS_FACTOR;
+                    if !self.$index.is_or() && !self.$index.is_not() {
+                        if let Some(len) = self.$index.len() {
+                            if !self.$index.is_tracking() {
+                                let factor = len + len * (type_ids.len() - 1) * ACCESS_FACTOR;
 
-                            if factor < factored_len {
-                                smallest = len;
-                                smallest_dense = self.$index.dense();
-                                mask = 1 << $index;
-                                factored_len = factor;
-                            }
-                        } else {
-                            let factor = len * type_ids.len() * ACCESS_FACTOR;
+                                if factor < factored_len {
+                                    smallest = len;
+                                    smallest_dense = self.$index.dense();
+                                    mask = 1 << $index;
+                                    factored_len = factor;
+                                }
+                            } else {
+                                let factor = len * type_ids.len() * ACCESS_FACTOR;
 
-                            if factor < factored_len {
-                                smallest = len;
-                                smallest_dense = self.$index.dense();
-                                mask = 0;
-                                factored_len = factor;
+                                if factor < factored_len {
+                                    smallest = len;
+                                    smallest_dense = self.$index.dense();
+                                    mask = 0;
+                                    factored_len = factor;
+                                }
                             }
                         }
                     }
@@ -227,36 +247,41 @@ macro_rules! impl_into_iter {
 
                 if smallest == core::usize::MAX {
                     Iter::Mixed(Mixed {
-                        current: 0,
-                        end: 0,
+                        count: 0,
                         mask,
-                        indices: smallest_dense,
+                        indices: [].iter(),
                         last_id: EntityId::dead(),
                         storage: (self.$index1.into_abstract(), $(self.$index.into_abstract(),)+),
+                        rev_next_storage: Vec::new(),
                     })
                 } else {
+                    let slice = unsafe { core::slice::from_raw_parts(smallest_dense, smallest) };
+
                     Iter::Mixed(Mixed {
-                        current: 0,
-                        end: smallest,
+                        count: 0,
                         mask,
-                        indices: smallest_dense,
+                        indices: slice.into_iter(),
                         last_id: EntityId::dead(),
                         storage: (self.$index1.into_abstract(), $(self.$index.into_abstract(),)+),
+                        rev_next_storage: Vec::new(),
                     })
                 }
             }
             fn iter_by<Driver: 'static>(self) -> Self::IntoIter {
-                let type_id = TypeId::of::<SparseSet<Driver>>();
+                let type_id = TypeId::of::<Driver>();
                 let mut found = false;
                 let mut smallest = core::usize::MAX;
                 let mut smallest_dense = ptr::null();
                 let mut mask: u16 = 0;
 
-                if self.$index1.type_id() == type_id {
+                if self.$index1.inner_type_id() == type_id {
                     found = true;
 
                     match self.$index1.len() {
-                        Some((len, is_exact)) => {
+                        Some(len) => {
+                            let is_exact = !(self.$index1.is_not()
+                                || self.$index1.is_or()
+                                || self.$index1.is_tracking());
                             if is_exact {
                                 smallest = len;
                                 smallest_dense = self.$index1.dense();
@@ -271,11 +296,14 @@ macro_rules! impl_into_iter {
                 }
 
                 $(
-                    if !found && self.$index.type_id() == type_id {
+                    if !found && self.$index.inner_type_id() == type_id {
                         found = true;
 
                         match self.$index.len() {
-                            Some((len, is_exact)) => {
+                            Some(len) => {
+                                let is_exact = !(self.$index.is_not()
+                                    || self.$index.is_or()
+                                    || self.$index.is_tracking());
                                 if is_exact {
                                     smallest = len;
                                     smallest_dense = self.$index.dense();
@@ -293,21 +321,23 @@ macro_rules! impl_into_iter {
                 if found {
                     if smallest == core::usize::MAX {
                         Iter::Mixed(Mixed {
-                            current: 0,
-                            end: 0,
+                            count: 0,
                             mask,
-                            indices: smallest_dense,
+                            indices: [].iter(),
                             last_id: EntityId::dead(),
                             storage: (self.$index1.into_abstract(), $(self.$index.into_abstract(),)+),
+                            rev_next_storage: Vec::new(),
                         })
                     } else {
+                        let slice = unsafe { core::slice::from_raw_parts(smallest_dense, smallest) };
+
                         Iter::Mixed(Mixed {
-                            current: 0,
-                            end: smallest,
+                            count: 0,
                             mask,
-                            indices: smallest_dense,
+                            indices: slice.into_iter(),
                             last_id: EntityId::dead(),
                             storage: (self.$index1.into_abstract(), $(self.$index.into_abstract(),)+),
+                            rev_next_storage: Vec::new(),
                         })
                     }
                 } else {

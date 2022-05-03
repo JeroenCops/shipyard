@@ -1,6 +1,8 @@
+use shipyard::Unique;
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{Document, HtmlElement};
 
+#[derive(Unique)]
 pub struct Hud {
     num_bunnies: HtmlElement,
     fps: HtmlElement,

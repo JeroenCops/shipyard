@@ -1,11 +1,21 @@
 use shipyard::*;
 
+struct USIZE(usize);
+impl Component for USIZE {
+    type Tracking = track::Untracked;
+}
+
+struct U32(u32);
+impl Component for U32 {
+    type Tracking = track::Untracked;
+}
+
 #[test]
 fn alive() {
-    let mut world = World::new();
-    world.add_entity((0u32,));
-    let entity = world.add_entity((1u32,));
-    world.add_entity((2u32,));
+    let mut world = World::new_with_custom_lock::<parking_lot::RawRwLock>();
+    world.add_entity((U32(0),));
+    let entity = world.add_entity((U32(1),));
+    world.add_entity((U32(2),));
 
     let mut entities = world.borrow::<EntitiesViewMut>().unwrap();
 
@@ -16,10 +26,10 @@ fn alive() {
 
 #[test]
 fn single_dead() {
-    let mut world = World::new();
-    world.add_entity((0u32,));
-    let entity = world.add_entity((1u32,));
-    world.add_entity((2u32,));
+    let mut world = World::new_with_custom_lock::<parking_lot::RawRwLock>();
+    world.add_entity((U32(0),));
+    let entity = world.add_entity((U32(1),));
+    world.add_entity((U32(2),));
 
     world.delete_entity(entity);
 
@@ -33,10 +43,10 @@ fn single_dead() {
 #[cfg(feature = "serde1")]
 #[test]
 fn multiple_dead_first() {
-    let mut world = World::new();
-    let entity0 = world.add_entity((0u32,));
-    let entity1 = world.add_entity((1u32,));
-    let entity2 = world.add_entity((2u32,));
+    let mut world = World::new_with_custom_lock::<parking_lot::RawRwLock>();
+    let entity0 = world.add_entity((U32(0),));
+    let entity1 = world.add_entity((U32(1),));
+    let entity2 = world.add_entity((U32(2),));
 
     world.delete_entity(entity1);
     world.delete_entity(entity0);
@@ -52,25 +62,25 @@ fn multiple_dead_first() {
 
     assert_eq!(
         entities.add_entity((), ()),
-        EntityId::from_index_and_gen(entity0.index(), 1)
+        EntityId::new_from_index_and_gen(entity0.index(), 1)
     );
     assert_eq!(
         entities.add_entity((), ()),
-        EntityId::from_index_and_gen(entity2.index(), 1)
+        EntityId::new_from_index_and_gen(entity2.index(), 1)
     );
     assert_eq!(
         entities.add_entity((), ()),
-        EntityId::from_index_and_gen(3, 0)
+        EntityId::new_from_index_and_gen(3, 0)
     );
 }
 
 #[cfg(feature = "serde1")]
 #[test]
 fn multiple_dead_middle() {
-    let mut world = World::new();
-    let entity0 = world.add_entity((0u32,));
-    let entity1 = world.add_entity((1u32,));
-    let entity2 = world.add_entity((2u32,));
+    let mut world = World::new_with_custom_lock::<parking_lot::RawRwLock>();
+    let entity0 = world.add_entity((U32(0),));
+    let entity1 = world.add_entity((U32(1),));
+    let entity2 = world.add_entity((U32(2),));
 
     world.delete_entity(entity0);
     world.delete_entity(entity1);
@@ -86,25 +96,25 @@ fn multiple_dead_middle() {
 
     assert_eq!(
         entities.add_entity((), ()),
-        EntityId::from_index_and_gen(entity0.index(), 1)
+        EntityId::new_from_index_and_gen(entity0.index(), 1)
     );
     assert_eq!(
         entities.add_entity((), ()),
-        EntityId::from_index_and_gen(entity2.index(), 1)
+        EntityId::new_from_index_and_gen(entity2.index(), 1)
     );
     assert_eq!(
         entities.add_entity((), ()),
-        EntityId::from_index_and_gen(3, 0)
+        EntityId::new_from_index_and_gen(3, 0)
     );
 }
 
 #[cfg(feature = "serde1")]
 #[test]
 fn multiple_dead_last() {
-    let mut world = World::new();
-    let entity0 = world.add_entity((0u32,));
-    let entity1 = world.add_entity((1u32,));
-    let entity2 = world.add_entity((2u32,));
+    let mut world = World::new_with_custom_lock::<parking_lot::RawRwLock>();
+    let entity0 = world.add_entity((U32(0),));
+    let entity1 = world.add_entity((U32(1),));
+    let entity2 = world.add_entity((U32(2),));
 
     world.delete_entity(entity0);
     world.delete_entity(entity2);
@@ -120,23 +130,23 @@ fn multiple_dead_last() {
 
     assert_eq!(
         entities.add_entity((), ()),
-        EntityId::from_index_and_gen(entity0.index(), 1)
+        EntityId::new_from_index_and_gen(entity0.index(), 1)
     );
     assert_eq!(
         entities.add_entity((), ()),
-        EntityId::from_index_and_gen(entity2.index(), 1)
+        EntityId::new_from_index_and_gen(entity2.index(), 1)
     );
     assert_eq!(
         entities.add_entity((), ()),
-        EntityId::from_index_and_gen(3, 0)
+        EntityId::new_from_index_and_gen(3, 0)
     );
 }
 
 #[cfg(feature = "serde1")]
 #[test]
 fn new_world_empty() {
-    let world = World::new();
-    let entity = EntityId::from_index_and_gen(3, 0);
+    let world = World::new_with_custom_lock::<parking_lot::RawRwLock>();
+    let entity = EntityId::new_from_index_and_gen(3, 0);
 
     let mut entities = world.borrow::<EntitiesViewMut>().unwrap();
 
@@ -146,31 +156,31 @@ fn new_world_empty() {
 
     assert_eq!(
         entities.add_entity((), ()),
-        EntityId::from_index_and_gen(0, 0)
+        EntityId::new_from_index_and_gen(0, 0)
     );
     assert_eq!(
         entities.add_entity((), ()),
-        EntityId::from_index_and_gen(1, 0)
+        EntityId::new_from_index_and_gen(1, 0)
     );
     assert_eq!(
         entities.add_entity((), ()),
-        EntityId::from_index_and_gen(2, 0)
+        EntityId::new_from_index_and_gen(2, 0)
     );
     assert_eq!(
         entities.add_entity((), ()),
-        EntityId::from_index_and_gen(4, 0)
+        EntityId::new_from_index_and_gen(4, 0)
     );
 }
 
 #[cfg(feature = "serde1")]
 #[test]
 fn new_world() {
-    let mut world = World::new();
-    let entity = EntityId::from_index_and_gen(5, 0);
+    let mut world = World::new_with_custom_lock::<parking_lot::RawRwLock>();
+    let entity = EntityId::new_from_index_and_gen(5, 0);
 
-    let entity0 = world.add_entity((0u32,));
-    let entity1 = world.add_entity((1u32,));
-    let entity2 = world.add_entity((2u32,));
+    let entity0 = world.add_entity((U32(0),));
+    let entity1 = world.add_entity((U32(1),));
+    let entity2 = world.add_entity((U32(2),));
 
     world.delete_entity(entity0);
     world.delete_entity(entity1);
@@ -184,26 +194,26 @@ fn new_world() {
 
     assert_eq!(
         entities.add_entity((), ()),
-        EntityId::from_index_and_gen(0, 1)
+        EntityId::new_from_index_and_gen(0, 1)
     );
     assert_eq!(
         entities.add_entity((), ()),
-        EntityId::from_index_and_gen(1, 1)
+        EntityId::new_from_index_and_gen(1, 1)
     );
     assert_eq!(
         entities.add_entity((), ()),
-        EntityId::from_index_and_gen(2, 1)
+        EntityId::new_from_index_and_gen(2, 1)
     );
     assert_eq!(
         entities.add_entity((), ()),
-        EntityId::from_index_and_gen(3, 0)
+        EntityId::new_from_index_and_gen(3, 0)
     );
     assert_eq!(
         entities.add_entity((), ()),
-        EntityId::from_index_and_gen(4, 0)
+        EntityId::new_from_index_and_gen(4, 0)
     );
     assert_eq!(
         entities.add_entity((), ()),
-        EntityId::from_index_and_gen(6, 0)
+        EntityId::new_from_index_and_gen(6, 0)
     );
 }

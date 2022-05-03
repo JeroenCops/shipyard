@@ -1,11 +1,27 @@
 #[cfg(feature = "thread_local")]
 mod non_send_sync;
 
+struct U32(u32);
+impl Component for U32 {
+    type Tracking = track::Untracked;
+}
+impl Unique for U32 {
+    type Tracking = track::Untracked;
+}
+
+struct USIZE(usize);
+impl Component for USIZE {
+    type Tracking = track::Untracked;
+}
+impl Unique for USIZE {
+    type Tracking = track::Untracked;
+}
+
 use shipyard::*;
 
 #[test]
 fn duplicate_name() {
-    let world = World::new();
+    let world = World::new_with_custom_lock::<parking_lot::RawRwLock>();
 
     Workload::builder("")
         .with_system(|| {})
@@ -21,20 +37,20 @@ fn duplicate_name() {
 
 #[test]
 fn rename() {
-    fn increment(mut i: UniqueViewMut<u32>) {
-        *i += 1;
+    fn increment(mut i: UniqueViewMut<U32>) {
+        i.0 += 1;
     }
 
-    let world = World::new();
+    let world = World::new_with_custom_lock::<parking_lot::RawRwLock>();
 
-    world.add_unique(0u32).unwrap();
+    world.add_unique(U32(0));
 
     Workload::builder("Empty")
-        .with_system(&increment)
+        .with_system(increment)
         .add_to_world(&world)
         .unwrap();
 
-    world.rename_workload("Empty", "New Empty").unwrap();
+    world.rename_workload("Empty", "New Empty");
 
     assert_eq!(
         world
@@ -47,5 +63,104 @@ fn rename() {
 
     world.run_workload("New Empty").unwrap();
 
-    assert_eq!(*world.borrow::<UniqueView<u32>>().unwrap(), 1);
+    assert_eq!(world.borrow::<UniqueView<U32>>().unwrap().0, 1);
+}
+
+#[test]
+fn are_all_uniques_present_in_world() {
+    let world = World::new_with_custom_lock::<parking_lot::RawRwLock>();
+
+    world.add_unique(U32(0));
+
+    Workload::builder("")
+        .are_all_uniques_present_in_world(&world)
+        .unwrap();
+
+    Workload::builder("")
+        .with_system(|_: UniqueView<U32>| {})
+        .are_all_uniques_present_in_world(&world)
+        .unwrap();
+
+    assert_eq!(
+        Workload::builder("")
+            .with_workload("other_workload")
+            .are_all_uniques_present_in_world(&world),
+        Err(error::UniquePresence::Workload(Box::new("other_workload")))
+    );
+
+    let type_info = {
+        let mut borrow_info = Vec::new();
+        UniqueView::<USIZE>::borrow_info(&mut borrow_info);
+        borrow_info.remove(0)
+    };
+    assert_eq!(
+        Workload::builder("")
+            .with_system(|_: UniqueView<USIZE>| {})
+            .are_all_uniques_present_in_world(&world),
+        Err(error::UniquePresence::Unique(type_info).into())
+    );
+
+    let type_info = {
+        let mut borrow_info = Vec::new();
+        UniqueViewMut::<USIZE>::borrow_info(&mut borrow_info);
+        borrow_info.remove(0)
+    };
+    assert_eq!(
+        Workload::builder("")
+            .with_system(|_: UniqueViewMut<USIZE>| {})
+            .are_all_uniques_present_in_world(&world),
+        Err(error::UniquePresence::Unique(type_info).into())
+    );
+}
+
+#[test]
+fn run_one_with_world() {
+    let world1 = World::new_with_custom_lock::<parking_lot::RawRwLock>();
+    let world2 = World::new_with_custom_lock::<parking_lot::RawRwLock>();
+
+    let builder = Workload::builder("").with_system(|| dbg!(1));
+    let (workload, _) = builder.build().unwrap();
+
+    workload.run_with_world(&world1).unwrap();
+    workload.run_with_world(&world2).unwrap();
+
+    let builder2 = Workload::builder("Named").with_system(|| dbg!(1));
+    let (workload2, _) = builder2.build().unwrap();
+
+    workload2.run_with_world(&world1).unwrap();
+    workload2.run_with_world(&world2).unwrap();
+}
+
+#[test]
+fn run_with_world() {
+    let world1 = World::new_with_custom_lock::<parking_lot::RawRwLock>();
+    let world2 = World::new_with_custom_lock::<parking_lot::RawRwLock>();
+
+    let builder = Workload::builder("")
+        .with_system(|| dbg!(1))
+        .with_system(|| dbg!(1));
+    let (workload, _) = builder.build().unwrap();
+
+    workload.run_with_world(&world1).unwrap();
+    workload.run_with_world(&world2).unwrap();
+
+    let builder2 = Workload::builder("Named")
+        .with_system(|| dbg!(1))
+        .with_system(|| dbg!(1));
+    let (workload2, _) = builder2.build().unwrap();
+
+    workload2.run_with_world(&world1).unwrap();
+    workload2.run_with_world(&world2).unwrap();
+}
+
+#[test]
+fn contains() {
+    fn w() -> Workload {
+        (|| {}).into_workload()
+    }
+    let world = World::new_with_custom_lock::<parking_lot::RawRwLock>();
+    world.add_workload(w);
+    assert!(world.contains_workload(w.as_label()));
+    assert!(world.contains_workload(w));
+    world.run_workload(w).unwrap();
 }

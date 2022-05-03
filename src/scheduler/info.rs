@@ -3,8 +3,9 @@
 pub use crate::type_id::TypeId;
 
 use crate::borrow::Mutability;
+use crate::scheduler::Label;
 use crate::storage::StorageId;
-use alloc::borrow::Cow;
+use alloc::boxed::Box;
 use alloc::vec::Vec;
 
 /// Contains information related to a workload.
@@ -13,7 +14,7 @@ use alloc::vec::Vec;
 #[derive(Debug, Clone)]
 pub struct WorkloadInfo {
     #[allow(missing_docs)]
-    pub name: Cow<'static, str>,
+    pub name: Box<dyn Label>,
     #[allow(missing_docs)]
     pub batch_info: Vec<BatchInfo>,
 }
@@ -24,7 +25,7 @@ pub struct WorkloadInfo {
 #[derive(Debug, Clone)]
 pub struct BatchInfo {
     #[allow(missing_docs)]
-    pub systems: Vec<SystemInfo>,
+    pub systems: (Option<SystemInfo>, Vec<SystemInfo>),
 }
 
 /// Contains information related to a system.
@@ -56,7 +57,7 @@ pub enum Conflict {
     /// Rust rules do not allow the type described by `type_info` to be borrowed at the same time as `other_type_info`.
     Borrow {
         #[allow(missing_docs)]
-        type_info: TypeInfo,
+        type_info: Option<TypeInfo>,
         #[allow(missing_docs)]
         other_system: SystemId,
         #[allow(missing_docs)]
@@ -104,9 +105,7 @@ pub struct TypeInfo {
     #[allow(missing_docs)]
     pub storage_id: StorageId,
     #[allow(missing_docs)]
-    pub is_send: bool,
-    #[allow(missing_docs)]
-    pub is_sync: bool,
+    pub thread_safe: bool,
 }
 
 impl PartialEq for TypeInfo {
@@ -125,20 +124,16 @@ impl core::fmt::Debug for TypeInfo {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut debug_struct = f.debug_struct("TypeInfo");
 
-        match (self.is_send, self.is_sync) {
-            (true, true) => debug_struct.field("name", &self.name),
-            (false, true) => {
-                debug_struct.field("name", &format_args!("shipyard::NonSend<{}>", self.name))
-            }
-            (true, false) => {
-                debug_struct.field("name", &format_args!("shipyard::NonSync<{}>", self.name))
-            }
-            (false, false) => debug_struct.field(
-                "name",
-                &format_args!("shipyard::NonSendSync<{}>", self.name),
-            ),
-        }
-        .field("mutability", &self.mutability)
-        .finish()
+        debug_struct
+            .field("name", &self.name)
+            .field("mutability", &self.mutability)
+            .field("thread_safe", &self.thread_safe)
+            .finish()
     }
 }
+
+/// Contains a list of workloads, their systems and which storages these systems borrow.
+#[allow(clippy::type_complexity)]
+pub struct WorkloadsTypeUsage(
+    pub hashbrown::HashMap<Box<dyn Label>, Vec<(&'static str, Vec<TypeInfo>)>>,
+);

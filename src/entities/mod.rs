@@ -3,6 +3,7 @@ mod iterator;
 pub use iterator::EntitiesIter;
 
 use crate::add_component::AddComponent;
+use crate::add_distinct_component::AddDistinctComponent;
 use crate::add_entity::AddEntity;
 use crate::entity_id::EntityId;
 use crate::error;
@@ -61,15 +62,18 @@ impl Entities {
     ///
     /// ### Example
     /// ```
-    /// use shipyard::{EntitiesView, ViewMut, World};
+    /// use shipyard::{Component, EntitiesView, ViewMut, World};
+    ///
+    /// #[derive(Component)]
+    /// struct U32(u32);
     ///
     /// let mut world = World::new();
     ///
     /// let entity = world.add_entity(());
     ///
-    /// let (entities, mut u32s) = world.borrow::<(EntitiesView, ViewMut<u32>)>().unwrap();
+    /// let (entities, mut u32s) = world.borrow::<(EntitiesView, ViewMut<U32>)>().unwrap();
     ///
-    /// entities.add_component(entity, &mut u32s, 0);
+    /// entities.add_component(entity, &mut u32s, U32(0));
     /// ```
     #[track_caller]
     #[inline]
@@ -81,6 +85,46 @@ impl Entities {
     ) {
         if self.is_alive(entity) {
             storages.add_component_unchecked(entity, component);
+        } else {
+            panic!("{:?}", error::AddComponent::EntityIsNotAlive);
+        }
+    }
+    /// Adds `component` to `entity`, multiple components can be added at the same time using a tuple.  
+    /// If the entity already has this component, it won't be replaced. Very useful if you want accurate modification tracking.  
+    /// `Entities` is only borrowed immutably.  
+    ///
+    /// Returns `true` if the component was added.
+    ///
+    /// ### Panics
+    ///
+    /// - `entity` is not alive.
+    ///
+    /// ### Example
+    /// ```
+    /// use shipyard::{Component, EntitiesView, ViewMut, World};
+    ///
+    /// #[derive(Component, PartialEq)]
+    /// struct U32(u32);
+    ///
+    /// let mut world = World::new();
+    ///
+    /// let entity = world.add_entity(());
+    ///
+    /// let (entities, mut u32s) = world.borrow::<(EntitiesView, ViewMut<U32>)>().unwrap();
+    ///
+    /// assert!(entities.add_distinct_component(entity, &mut u32s, U32(0)));
+    /// assert!(!entities.add_distinct_component(entity, &mut u32s, U32(0)));
+    /// ```
+    #[track_caller]
+    #[inline]
+    pub fn add_distinct_component<S: AddDistinctComponent>(
+        &self,
+        entity: EntityId,
+        mut storages: S,
+        component: S::Component,
+    ) -> bool {
+        if self.is_alive(entity) {
+            storages.add_distinct_component_unchecked(entity, component)
         } else {
             panic!("{:?}", error::AddComponent::EntityIsNotAlive);
         }
@@ -158,17 +202,23 @@ impl Entities {
     ///
     /// ### Example:
     /// ```
-    /// use shipyard::{EntitiesViewMut, ViewMut, World};
+    /// use shipyard::{Component, EntitiesViewMut, ViewMut, World};
+    ///
+    /// #[derive(Component, Debug, PartialEq, Eq)]
+    /// struct U32(u32);
+    ///
+    /// #[derive(Component, Debug, PartialEq, Eq)]
+    /// struct USIZE(usize);
     ///
     /// let world = World::new();
     ///
     /// let (mut entities, mut usizes, mut u32s) = world
-    ///     .borrow::<(EntitiesViewMut, ViewMut<usize>, ViewMut<u32>)>()
+    ///     .borrow::<(EntitiesViewMut, ViewMut<USIZE>, ViewMut<U32>)>()
     ///     .unwrap();
     ///
-    /// let entity = entities.add_entity((&mut usizes, &mut u32s), (0, 1));
-    /// assert_eq!(usizes[entity], 0);
-    /// assert_eq!(u32s[entity], 1);
+    /// let entity = entities.add_entity((&mut usizes, &mut u32s), (USIZE(0), U32(1)));
+    /// assert_eq!(usizes[entity], USIZE(0));
+    /// assert_eq!(u32s[entity], U32(1));
     /// ```
     ///
     /// [`EntityId`]: crate::entity_id::EntityId
@@ -179,7 +229,7 @@ impl Entities {
         component: T::Component,
     ) -> EntityId {
         let entity_id = self.generate();
-        storages.add_entity(entity_id, component);
+        AddEntity::add_entity(&mut storages, entity_id, component);
         entity_id
     }
     /// Creates multiple new entities and returns an iterator yielding the new [`EntityId`]s.  
@@ -188,18 +238,22 @@ impl Entities {
     /// ### Example
     ///
     /// ```
-    /// use shipyard::{EntitiesViewMut, ViewMut, World};
+    /// use shipyard::{Component, EntitiesViewMut, ViewMut, World};
+    ///
+    /// #[derive(Component)]
+    /// struct U32(u32);
+    ///
+    /// #[derive(Component)]
+    /// struct USIZE(usize);
     ///
     /// let world = World::new();
     ///
     /// let (mut entities, mut usizes, mut u32s) = world
-    ///     .borrow::<(EntitiesViewMut, ViewMut<usize>, ViewMut<u32>)>()
+    ///     .borrow::<(EntitiesViewMut, ViewMut<USIZE>, ViewMut<U32>)>()
     ///     .unwrap();
     ///
-    /// let entity0 = entities.bulk_add_entity((), (0..1).map(|_| {})).next();
-    /// let entity1 = entities.bulk_add_entity(&mut u32s, 1..2).next();
     /// let new_entities =
-    ///     entities.bulk_add_entity((&mut u32s, &mut usizes), (10..20).map(|i| (i as u32, i)));
+    ///     entities.bulk_add_entity((&mut u32s, &mut usizes), (10..20).map(|i| (U32(i as u32), USIZE(i))));
     /// ```
     ///
     /// [`EntityId`]: crate::entity_id::EntityId
@@ -216,15 +270,18 @@ impl Entities {
 
         storages.bulk_reserve(new_entities);
         for (component, id) in (&mut iter).zip(new_entities.iter().copied()) {
-            storages.add_entity(id, component)
+            AddEntity::add_entity(&mut storages, id, component);
         }
 
         // have to use two loops because of self borrow
         for (component, id) in iter.zip(repeat_with(|| self.generate())) {
-            storages.add_entity(id, component)
+            AddEntity::add_entity(&mut storages, id, component);
         }
 
-        BulkEntityIter(self.data[entities_len..].iter().copied())
+        BulkEntityIter {
+            iter: self.data[entities_len..].iter().copied(),
+            slice: &self.data[entities_len..],
+        }
     }
     /// Creates an iterator over all entities.
     #[inline]
@@ -312,7 +369,7 @@ impl Entities {
 }
 
 impl Storage for Entities {
-    fn clear(&mut self) {
+    fn clear(&mut self, _current: u32) {
         if self.data.is_empty() {
             return;
         }
@@ -351,6 +408,9 @@ impl Storage for Entities {
             component_count: self.data.len(),
         })
     }
+    fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
 }
 
 #[test]
@@ -382,7 +442,7 @@ fn entities() {
     assert_eq!(key02.index(), 0);
     assert_eq!(key02.gen(), 2);
 
-    let last_key = EntityId::new_from_parts(0, EntityId::max_gen() as u16 - 1, 0);
+    let last_key = EntityId::new_from_index_and_gen(0, EntityId::max_gen());
     entities.data[0] = last_key;
     assert!(entities.delete_unchecked(last_key));
     assert_eq!(entities.list, None);

@@ -1,4 +1,5 @@
-use shipyard::{AddComponent, EntitiesView, EntitiesViewMut, ViewMut, World};
+use super::{U32, USIZE};
+use shipyard::{AddComponent, EntitiesViewMut, ViewMut, World};
 
 #[test]
 #[rustfmt::skip]
@@ -8,8 +9,8 @@ let mut world = World::new();
 
 let id = world.add_entity(());
 
-world.add_component(id, (0u32,));
-world.add_component(id, (0u32, 1usize));
+world.add_component(id, (U32(0),));
+world.add_component(id, (U32(0), USIZE(1)));
 // ANCHOR_END: world
 }
 
@@ -19,17 +20,14 @@ fn view() {
 // ANCHOR: view
 let world = World::new();
 
-let id = world
-    .borrow::<EntitiesViewMut>()
-    .unwrap()
-    .add_entity((), ());
+world.run(
+    |mut entities: EntitiesViewMut, mut u32s: ViewMut<U32>, mut usizes: ViewMut<USIZE>| {
+        let id = entities.add_entity((), ());
 
-let (entities, mut u32s, mut usizes) = world
-    .borrow::<(EntitiesView, ViewMut<u32>, ViewMut<usize>)>()
-    .unwrap();
-
-entities.add_component(id, &mut u32s, 0);
-entities.add_component(id, (&mut u32s, &mut usizes), (0, 1));
-u32s.add_component_unchecked(id, 0);
+        entities.add_component(id, &mut u32s, U32(0));
+        entities.add_component(id, (&mut u32s, &mut usizes), (U32(0), USIZE(1)));
+        u32s.add_component_unchecked(id, U32(0));
+    },
+);
 // ANCHOR_END: view
 }

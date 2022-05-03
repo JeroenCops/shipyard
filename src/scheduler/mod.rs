@@ -1,10 +1,14 @@
 mod builder;
 pub mod info;
+mod into_workload;
 mod into_workload_system;
+mod label;
 mod system;
 
-pub use builder::{Workload, WorkloadBuilder};
+pub use builder::{ScheduledWorkload, WorkloadBuilder};
+pub use into_workload::{IntoWorkload, Workload};
 pub use into_workload_system::IntoWorkloadSystem;
+pub use label::{AsLabel, Label};
 pub use system::WorkloadSystem;
 
 pub(crate) use info::TypeInfo;
@@ -12,18 +16,38 @@ pub(crate) use info::TypeInfo;
 use crate::error;
 use crate::type_id::TypeId;
 use crate::World;
-use alloc::borrow::Cow;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use hashbrown::HashMap;
 
 /// List of indexes into both systems and system_names
 #[derive(Default)]
-#[cfg_attr(test, derive(PartialEq, Eq, Debug))]
 pub(super) struct Batches {
-    pub(super) parallel: Vec<Vec<usize>>,
+    pub(super) parallel: Vec<(Option<usize>, Vec<usize>)>,
     pub(super) sequential: Vec<usize>,
+    pub(super) skip_if:
+        Vec<Box<dyn Fn(crate::view::AllStoragesView<'_>) -> bool + Send + Sync + 'static>>,
 }
+
+#[cfg(test)]
+impl core::fmt::Debug for Batches {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Batches")
+            .field("parallel", &self.parallel)
+            .field("sequential", &self.sequential)
+            .finish()
+    }
+}
+
+#[cfg(test)]
+impl PartialEq for Batches {
+    fn eq(&self, other: &Self) -> bool {
+        self.parallel == other.parallel && self.sequential == other.sequential
+    }
+}
+
+#[cfg(test)]
+impl Eq for Batches {}
 
 // systems are stored in an array to easily find if a system was already added
 // this wouldn't be possible if they were in the HashMap
@@ -31,14 +55,14 @@ pub(super) struct Batches {
 // a batch lists systems that can run in parallel
 #[allow(clippy::type_complexity)]
 pub(crate) struct Scheduler {
-    pub(super) systems: Vec<Box<dyn Fn(&World) -> Result<(), error::Run> + Send + Sync + 'static>>,
-    pub(super) system_names: Vec<&'static str>,
-    pub(super) system_generators: Vec<fn(&mut Vec<TypeInfo>) -> TypeId>,
+    pub(crate) systems: Vec<Box<dyn Fn(&World) -> Result<(), error::Run> + Send + Sync + 'static>>,
+    pub(crate) system_names: Vec<&'static str>,
+    pub(crate) system_generators: Vec<fn(&mut Vec<TypeInfo>) -> TypeId>,
     // system's `TypeId` to an index into both systems and system_names
     lookup_table: HashMap<TypeId, usize>,
     /// workload name to list of "batches"
-    workloads: HashMap<Cow<'static, str>, Batches>,
-    default: Cow<'static, str>,
+    pub(crate) workloads: HashMap<Box<dyn Label>, Batches>,
+    pub(crate) default: Box<dyn Label>,
 }
 
 impl Default for Scheduler {
@@ -49,24 +73,25 @@ impl Default for Scheduler {
             system_generators: Vec::new(),
             lookup_table: HashMap::new(),
             workloads: HashMap::new(),
-            default: "".into(),
+            default: Box::new(""),
         }
     }
 }
 
 impl Scheduler {
-    pub(crate) fn set_default(
+    pub(crate) fn set_default<L: Label>(
         &mut self,
-        name: Cow<'static, str>,
+        label: L,
     ) -> Result<(), error::SetDefaultWorkload> {
-        if self.workloads.contains_key(&name) {
-            self.default = name;
+        let label: Box<dyn Label> = Box::new(label);
+        if self.workloads.contains_key(&label) {
+            self.default = label;
             Ok(())
         } else {
             Err(error::SetDefaultWorkload::MissingWorkload)
         }
     }
-    pub(crate) fn workload(&self, name: &str) -> Result<&Batches, error::RunWorkload> {
+    pub(crate) fn workload(&self, name: &dyn Label) -> Result<&Batches, error::RunWorkload> {
         if let Some(batches) = self.workloads.get(name) {
             Ok(batches)
         } else {
@@ -76,16 +101,19 @@ impl Scheduler {
     pub(crate) fn default_workload(&self) -> &Batches {
         &self.workloads[&self.default]
     }
+    pub(crate) fn contains_workload(&self, name: &dyn Label) -> bool {
+        self.workloads.contains_key(name)
+    }
     pub(crate) fn is_empty(&self) -> bool {
         self.workloads.is_empty()
     }
-    pub(crate) fn rename(&mut self, old: Cow<'static, str>, new: Cow<'static, str>) {
-        if let Some(batches) = self.workloads.remove(&old) {
-            self.workloads.insert(new.clone(), batches);
-
-            if self.default == old {
-                self.default = new;
+    pub(crate) fn rename(&mut self, old: &dyn Label, new: Box<dyn Label>) {
+        if let Some(batches) = self.workloads.remove(old) {
+            if &*self.default == old {
+                self.default = new.clone();
             }
+
+            self.workloads.insert(new, batches);
         }
     }
 }

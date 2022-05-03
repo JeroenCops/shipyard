@@ -1,34 +1,50 @@
 use crate::all_storages::AllStorages;
+use crate::component::Component;
 use crate::entity_id::EntityId;
 use crate::sparse_set::SparseSet;
 use crate::storage::StorageId;
+#[cfg(doc)]
+use crate::world::World;
 
-pub trait AddComponent {
+/// Trait used as bound for [`World::add_entity`], [`World::add_component`], [`AllStorages::add_entity`] and [`AllStorages::add_component`].
+pub trait TupleAddComponent {
+    /// See [`World::add_entity`], [`World::add_component`], [`AllStorages::add_entity`] and [`AllStorages::add_component`].
     fn add_component(self, all_storages: &mut AllStorages, entity: EntityId);
 }
 
-impl AddComponent for () {
+impl TupleAddComponent for () {
     #[inline]
     fn add_component(self, _: &mut AllStorages, _: EntityId) {}
 }
 
-impl<T: 'static + Send + Sync> AddComponent for (T,) {
+impl<T: Send + Sync + Component> TupleAddComponent for (T,)
+where
+    T::Tracking: Send + Sync,
+{
     #[inline]
     fn add_component(self, all_storages: &mut AllStorages, entity: EntityId) {
+        let current = all_storages.get_current();
         all_storages
-            .exclusive_storage_or_insert_mut(StorageId::of::<SparseSet<T>>(), SparseSet::new)
-            .insert(entity, self.0);
+            .exclusive_storage_or_insert_mut(
+                StorageId::of::<SparseSet<T, T::Tracking>>(),
+                SparseSet::new,
+            )
+            .insert(entity, self.0, current);
     }
 }
 
 macro_rules! impl_add_component {
     ($(($type: ident, $index: tt))+) => {
-        impl<$($type: 'static + Send + Sync,)+> AddComponent for ($($type,)+) {
+        impl<$($type: Send + Sync + Component,)+> TupleAddComponent for ($($type,)+)
+        where
+            $($type::Tracking: Send + Sync),+
+        {
             fn add_component(self, all_storages: &mut AllStorages, entity: EntityId) {
+                let current = all_storages.get_current();
                 $(
                     all_storages
-                        .exclusive_storage_or_insert_mut(StorageId::of::<SparseSet<$type>>(), SparseSet::new)
-                        .insert(entity, self.$index);
+                        .exclusive_storage_or_insert_mut(StorageId::of::<SparseSet<$type, $type::Tracking>>(), SparseSet::new)
+                        .insert(entity, self.$index, current);
                 )+
             }
         }

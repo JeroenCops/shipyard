@@ -37,7 +37,7 @@ jobs:
           profile: minimal
           components: miri
 
-      - run: cargo +nightly miri test --no-default-features
+      - run: cargo +nightly miri test --tests --lib --no-default-features
   clippy:
     runs-on: ubuntu-latest
     needs: install-stable
@@ -131,7 +131,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2
       - run: rustup +stable target add wasm32-unknown-unknown
-      - run: cargo +stable build --release --package square_eater --target wasm32-unknown-unknown
+      - run: cargo +stable build --release --package square_eater --target wasm32-unknown-unknown --manifest-path=square_eater/Cargo.toml
       - run: mv ./target/wasm32-unknown-unknown/release/square_eater.wasm ./square_eater/public
       - name: save square_eater
         uses: actions/upload-artifact@v2
@@ -155,9 +155,6 @@ jobs:
           name: guide_0_5_0
           path: dist/guide/0.5.0
 
-      - name: duplicate guide_master
-        run: cp -r dist/guide/master dist/book
-
       - name: load bunny_demo
         uses: actions/download-artifact@v2
         with:
@@ -169,9 +166,6 @@ jobs:
         with:
           name: square_eater
           path: dist/square_eater
-
-      - name: duplicate demo
-        run: cp -r dist/bunny_demo dist/demo
 
       - name: deploy to gh pages
         uses: maxheld83/ghpages@master

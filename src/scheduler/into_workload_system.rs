@@ -10,6 +10,7 @@ use alloc::vec::Vec;
 use core::any::type_name;
 #[cfg(not(feature = "std"))]
 use core::any::Any;
+use core::sync::atomic::{AtomicU32, Ordering};
 #[cfg(feature = "std")]
 use std::error::Error;
 
@@ -19,7 +20,7 @@ use std::error::Error;
 pub trait IntoWorkloadSystem<B, R> {
     /// Wraps a function in a struct containing all information required by a workload.
     fn into_workload_system(self) -> Result<WorkloadSystem, error::InvalidSystem>;
-    /// Wraps a failible function in a struct containing all information required by a workload.  
+    /// Wraps a fallible function in a struct containing all information required by a workload.  
     /// The workload will stop if an error is returned.
     #[cfg(feature = "std")]
     fn into_workload_try_system<Ok, Err: Into<Box<dyn Error + Send + Sync>>>(
@@ -27,7 +28,7 @@ pub trait IntoWorkloadSystem<B, R> {
     ) -> Result<WorkloadSystem, error::InvalidSystem>
     where
         R: Into<Result<Ok, Err>>;
-    /// Wraps a failible function in a struct containing all information required by a workload.  
+    /// Wraps a fallible function in a struct containing all information required by a workload.  
     /// The workload will stop if an error is returned.
     #[cfg(not(feature = "std"))]
     fn into_workload_try_system<Ok, Err: 'static + Send + Any>(
@@ -43,17 +44,18 @@ impl<R, F> IntoWorkloadSystem<Nothing, R> for F
 where
     F: 'static + Send + Sync + Fn() -> R,
 {
-    #[allow(clippy::unit_arg)]
     fn into_workload_system(self) -> Result<WorkloadSystem, error::InvalidSystem> {
-        Ok(WorkloadSystem {
+        Ok(WorkloadSystem::System {
             borrow_constraints: Vec::new(),
-            system_fn: Box::new(move |_: &World| Ok(drop((self)()))),
+            system_fn: Box::new(move |_: &World| {
+                (self)();
+                Ok(())
+            }),
             system_type_id: TypeId::of::<F>(),
             system_type_name: type_name::<F>(),
             generator: |_| TypeId::of::<F>(),
         })
     }
-    #[allow(clippy::unit_arg)]
     #[cfg(feature = "std")]
     fn into_workload_try_system<Ok, Err: Into<Box<dyn Error + Send + Sync>>>(
         self,
@@ -61,17 +63,17 @@ where
     where
         R: Into<Result<Ok, Err>>,
     {
-        Ok(WorkloadSystem {
+        Ok(WorkloadSystem::System {
             borrow_constraints: Vec::new(),
             system_fn: Box::new(move |_: &World| {
-                Ok(drop((self)().into().map_err(error::Run::from_custom)?))
+                (self)().into().map_err(error::Run::from_custom)?;
+                Ok(())
             }),
             system_type_id: TypeId::of::<F>(),
             system_type_name: type_name::<F>(),
             generator: |_| TypeId::of::<F>(),
         })
     }
-    #[allow(clippy::unit_arg)]
     #[cfg(not(feature = "std"))]
     fn into_workload_try_system<Ok, Err: 'static + Send + Any>(
         self,
@@ -79,10 +81,11 @@ where
     where
         R: Into<Result<Ok, Err>>,
     {
-        Ok(WorkloadSystem {
+        Ok(WorkloadSystem::System {
             borrow_constraints: Vec::new(),
             system_fn: Box::new(move |_: &World| {
-                Ok(drop((self)().into().map_err(error::Run::from_custom)?))
+                (self)().into().map_err(error::Run::from_custom)?;
+                Ok(())
             }),
             system_type_id: TypeId::of::<F>(),
             system_type_name: type_name::<F>(),
@@ -111,9 +114,10 @@ macro_rules! impl_system {
         where
             Func: 'static
                 + Send
-                + Sync
-                + Fn($($type),+) -> R
-                + Fn($(<$type::Borrow as Borrow<'_>>::View),+) -> R {
+                + Sync,
+            for<'a, 'b> &'b Func:
+                Fn($($type),+) -> R
+                + Fn($(<$type::Borrow as Borrow<'a>>::View),+) -> R {
 
             fn into_workload_system(self) -> Result<WorkloadSystem, error::InvalidSystem> {
                 let mut borrows = Vec::new();
@@ -125,8 +129,7 @@ macro_rules! impl_system {
                     name: "",
                     storage_id: StorageId::of::<AllStorages>(),
                     mutability: Mutability::Exclusive,
-                    is_send: true,
-                    is_sync: true,
+                    thread_safe: true,
                 }) && borrows.len() > 1
                 {
                     return Err(error::InvalidSystem::AllStorages);
@@ -151,9 +154,14 @@ macro_rules! impl_system {
                     }
                 }
 
-                Ok(WorkloadSystem {
+                let last_run = AtomicU32::new(0);
+                Ok(WorkloadSystem::System {
                     borrow_constraints: borrows,
-                    system_fn: Box::new(move |world: &World| { Ok(drop((self)($($type::Borrow::borrow(&world)?),+))) }),
+                    system_fn: Box::new(move |world: &World| {
+                        let current = world.get_current();
+                        let last_run = last_run.swap(current, Ordering::Acquire);
+                        Ok(drop((&&self)($($type::Borrow::borrow(&world, Some(last_run), current)?),+)))
+                    }),
                     system_type_id: TypeId::of::<Func>(),
                     system_type_name: type_name::<Func>(),
                     generator: |constraints| {
@@ -176,8 +184,7 @@ macro_rules! impl_system {
                     name: "",
                     storage_id: StorageId::of::<AllStorages>(),
                     mutability: Mutability::Exclusive,
-                    is_send: true,
-                    is_sync: true,
+                    thread_safe: true,
                 }) && borrows.len() > 1
                 {
                     return Err(error::InvalidSystem::AllStorages);
@@ -202,9 +209,14 @@ macro_rules! impl_system {
                     }
                 }
 
-                Ok(WorkloadSystem {
+                let last_run = AtomicU32::new(0);
+                Ok(WorkloadSystem::System {
                     borrow_constraints: borrows,
-                    system_fn: Box::new(move |world: &World| { Ok(drop((self)($($type::Borrow::borrow(&world)?),+).into().map_err(error::Run::from_custom)?)) }),
+                    system_fn: Box::new(move |world: &World| {
+                        let current = world.get_current();
+                        let last_run = last_run.swap(current, Ordering::Acquire);
+                        Ok(drop((&&self)($($type::Borrow::borrow(&world, Some(last_run), current)?),+).into().map_err(error::Run::from_custom)?))
+                    }),
                     system_type_id: TypeId::of::<Func>(),
                     system_type_name: type_name::<Func>(),
                     generator: |constraints| {
@@ -227,8 +239,7 @@ macro_rules! impl_system {
                     name: "",
                     storage_id: StorageId::of::<AllStorages>(),
                     mutability: Mutability::Exclusive,
-                    is_send: true,
-                    is_sync: true,
+                    thread_safe: true,
                 }) && borrows.len() > 1
                 {
                     return Err(error::InvalidSystem::AllStorages);
@@ -253,10 +264,14 @@ macro_rules! impl_system {
                     }
                 }
 
-                Ok(WorkloadSystem {
+                let last_run = AtomicU32::new(0);
+                Ok(WorkloadSystem::System {
                     borrow_constraints: borrows,
-                    system_fn: Box::new(move |world: &World| { Ok(drop((self)($($type::Borrow::borrow(&world)?),+).into().map_err(error::Run::from_custom)?)) }),
-                    system_type_id: TypeId::of::<Func>(),
+                    system_fn: Box::new(move |world: &World| {
+                        let current = world.get_current();
+                        let last_run = last_run.swap(current, Ordering::Acquire);
+                        Ok(drop((&&self)($($type::Borrow::borrow(&world, Some(last_run), current)?),+).into().map_err(error::Run::from_custom)?))
+                    }),                    system_type_id: TypeId::of::<Func>(),
                     system_type_name: type_name::<Func>(),
                     generator: |constraints| {
                         $(

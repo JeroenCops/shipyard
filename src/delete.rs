@@ -1,22 +1,30 @@
+use crate::component::Component;
 use crate::entity_id::EntityId;
 use crate::sparse_set::SparseSet;
 use crate::view::ViewMut;
 
-/// Trait used to delete component(s).
+/// Deletes component from entities.
 pub trait Delete {
-    /// Deletes the component(s) of an entity, they won't be returned.  
-    /// Returns `true` if all storages deleted a component.
+    /// Deletes component in `entity`, return `true` if the entity had this component.  
+    /// Multiple components can be deleted at the same time using a tuple.
     ///
-    /// ### Example:
+    /// ### Example
     /// ```
-    /// use shipyard::{Delete, ViewMut, World};
+    /// use shipyard::{Component, Delete, ViewMut, World};
+    ///
+    /// #[derive(Component, Debug, PartialEq, Eq)]
+    /// struct U32(u32);
+    ///
+    /// #[derive(Component, Debug, PartialEq, Eq)]
+    /// struct USIZE(usize);
     ///
     /// let mut world = World::new();
     ///
-    /// let entity = world.add_entity((0usize, 1u32));
+    /// let entity = world.add_entity((USIZE(0), U32(1)));
     ///
-    /// let (mut usizes, mut u32s) = world.borrow::<(ViewMut<usize>, ViewMut<u32>)>().unwrap();
-    /// (&mut usizes, &mut u32s).delete(entity);
+    /// let (mut usizes, mut u32s) = world.borrow::<(ViewMut<USIZE>, ViewMut<U32>)>().unwrap();
+    ///
+    /// assert!((&mut usizes, &mut u32s).delete(entity));
     /// ```
     fn delete(&mut self, entity: EntityId) -> bool;
 }
@@ -28,17 +36,19 @@ impl Delete for () {
     }
 }
 
-impl<T: 'static> Delete for ViewMut<'_, T> {
+impl<T: Component> Delete for ViewMut<'_, T> {
     #[inline]
     fn delete(&mut self, entity: EntityId) -> bool {
-        SparseSet::delete(&mut *self, entity)
+        let current = self.current;
+        SparseSet::delete(&mut *self, entity, current)
     }
 }
 
-impl<T: 'static> Delete for &mut ViewMut<'_, T> {
+impl<T: Component> Delete for &mut ViewMut<'_, T> {
     #[inline]
     fn delete(&mut self, entity: EntityId) -> bool {
-        SparseSet::delete(&mut *self, entity)
+        let current = self.current;
+        SparseSet::delete(*self, entity, current)
     }
 }
 
@@ -49,7 +59,7 @@ macro_rules! impl_delete_component {
             fn delete(&mut self, entity: EntityId) -> bool {
                 $(
                     self.$index.delete(entity)
-                )&&+
+                )||+
             }
         }
     }

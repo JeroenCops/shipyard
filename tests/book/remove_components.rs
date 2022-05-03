@@ -1,3 +1,4 @@
+use super::{U32, USIZE};
 use shipyard::{EntitiesViewMut, Remove, ViewMut, World};
 
 #[test]
@@ -6,10 +7,10 @@ fn world() {
 // ANCHOR: world
 let mut world = World::new();
 
-let id = world.add_entity((0u32, 1usize));
+let id = world.add_entity((U32(0), USIZE(1)));
 
-world.remove::<(u32,)>(id);
-world.remove::<(u32, usize)>(id);
+world.remove::<(U32,)>(id);
+world.remove::<(U32, USIZE)>(id);
 // ANCHOR_END: world
 }
 
@@ -19,13 +20,13 @@ fn view() {
 // ANCHOR: view
 let world = World::new();
 
-let (mut entities, mut u32s, mut usizes) = world
-    .borrow::<(EntitiesViewMut, ViewMut<u32>, ViewMut<usize>)>()
-    .unwrap();
+world.run(
+    |mut entities: EntitiesViewMut, mut u32s: ViewMut<U32>, mut usizes: ViewMut<USIZE>| {
+        let id = entities.add_entity((&mut u32s, &mut usizes), (U32(0), USIZE(1)));
 
-let id = entities.add_entity((&mut u32s, &mut usizes), (0, 1));
-
-u32s.remove(id);
-(&mut u32s, &mut usizes).remove(id);
+        u32s.remove(id);
+        (&mut u32s, &mut usizes).remove(id);
+    },
+);
 // ANCHOR_END: view
 }

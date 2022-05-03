@@ -1,5 +1,6 @@
 use shipyard::*;
 
+#[derive(Unique)]
 struct Camera;
 
 impl Camera {
@@ -14,12 +15,11 @@ fn uniques() {
 // ANCHOR: uniques
 let world = World::new();
 
-world.add_unique(Camera::new()).unwrap();
+world.add_unique(Camera::new());
 
 world
     .run(|camera: UniqueView<Camera>| {
         // -- snip --
-    })
-    .unwrap();
+    });
 // ANCHOR_END: uniques
 }

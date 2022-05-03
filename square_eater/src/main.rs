@@ -1,7 +1,7 @@
 use macroquad::prelude::*;
 use shipyard::{
-    AddComponent, AllStoragesViewMut, EntitiesViewMut, IntoIter, IntoWithId, SparseSet, UniqueView,
-    UniqueViewMut, View, ViewMut, Workload, World,
+    AddComponent, AllStoragesViewMut, Component, EntitiesViewMut, IntoIter, IntoWithId,
+    IntoWorkloadSystem, SparseSet, Unique, UniqueView, UniqueViewMut, View, ViewMut, World,
 };
 
 const WIDTH: i32 = 640;
@@ -14,6 +14,10 @@ const ACCELERATION_RATE: f32 = 0.01;
 const SQUARE_SPAWN_RATE: u32 = 25;
 const SQUAGUM_SPAWN_RATE: u32 = 150;
 
+#[derive(Component)]
+struct MyRect(macroquad::prelude::Rect);
+
+#[derive(Unique)]
 struct Player {
     is_invincible: bool,
     i_counter: u32,
@@ -22,11 +26,14 @@ struct Player {
     rect: Rect,
 }
 
+#[derive(Component)]
 struct Squagum(Vec2);
+#[derive(Component)]
 struct Acceleration(f32);
+#[derive(Component)]
 struct ToDelete;
 
-#[derive(Debug)]
+#[derive(Debug, Component)]
 enum GameOver {
     Loose,
     Victory,
@@ -41,14 +48,14 @@ impl std::fmt::Display for GameOver {
 }
 
 /// generates a new random square.
-fn new_square() -> (Rect, Acceleration) {
+fn new_square() -> (MyRect, Acceleration) {
     (
-        Rect {
+        MyRect(Rect {
             x: rand::gen_range(MAX_SIZE / 2.0, WIDTH as f32 - MAX_SIZE / 2.),
             y: rand::gen_range(MAX_SIZE / 2.0, HEIGHT as f32 - MAX_SIZE / 2.),
             w: INIT_SIZE,
             h: INIT_SIZE,
-        },
+        }),
         Acceleration(0.),
     )
 }
@@ -65,15 +72,13 @@ fn window_conf() -> Conf {
 fn init_world(world: &mut World) {
     let _ = world.remove_unique::<Player>();
 
-    world
-        .add_unique(Player {
-            is_invincible: false,
-            i_counter: 0,
-            squagum: false,
-            squagum_counter: 0,
-            rect: Rect::new(0., 0., INIT_SIZE * 3., INIT_SIZE * 3.),
-        })
-        .unwrap();
+    world.add_unique(Player {
+        is_invincible: false,
+        i_counter: 0,
+        squagum: false,
+        squagum_counter: 0,
+        rect: Rect::new(0., 0., INIT_SIZE * 3., INIT_SIZE * 3.),
+    });
 
     world.bulk_add_entity((0..7).map(|_| new_square()));
 }
@@ -88,17 +93,18 @@ async fn main() {
     // seed the random number generator with a random value
     rand::srand(macroquad::miniquad::date::now() as u64);
 
-    Workload::builder("Game loop")
-        .with_system(&counters)
-        .with_system(&move_player)
-        .with_system(&move_square)
-        .with_system(&grow_square)
-        .with_system(&new_squares)
-        .with_system(&collision)
-        .with_try_system(&clean_up)
-        .with_system(&render)
-        .add_to_world(&world)
-        .unwrap();
+    world.add_workload(|| {
+        (
+            counters,
+            move_player,
+            move_square,
+            grow_square,
+            new_squares,
+            collision,
+            clean_up.into_workload_try_system().unwrap(),
+            render,
+        )
+    });
 
     let mut is_started = false;
     loop {
@@ -171,16 +177,16 @@ fn move_player(mut player: UniqueViewMut<Player>) {
 
 fn move_square(
     player: UniqueView<Player>,
-    mut rects: ViewMut<Rect>,
+    mut rects: ViewMut<MyRect>,
     mut accelerations: ViewMut<Acceleration>,
 ) {
     for mut acceleration in (&mut accelerations).iter() {
         acceleration.0 += ACCELERATION_RATE;
     }
 
-    let mut dirs = vec![Vec2::zero(); rects.len()];
+    let mut dirs = vec![Vec2::ZERO; rects.len()];
 
-    for ((id, rect), dir) in rects.iter().with_id().zip(&mut dirs) {
+    for ((id, MyRect(rect)), dir) in rects.iter().with_id().zip(&mut dirs) {
         if rect.w > player.rect.w && rect.h > player.rect.h {
             let player_dir = player.rect.point()
                 - Vec2::new(player.rect.w / 2., player.rect.h / 2.)
@@ -192,9 +198,9 @@ fn move_square(
                 *dir = -*dir;
             }
 
-            let mut neighbourg_dir = Vec2::zero();
+            let mut neighbourg_dir = Vec2::ZERO;
 
-            for neighbourg in rects.iter() {
+            for MyRect(neighbourg) in rects.iter() {
                 if rect.point().distance_squared(neighbourg.point()) < rect.w * rect.h / 1.5 {
                     neighbourg_dir += Vec2::new(rect.x - neighbourg.x, rect.y - neighbourg.y);
                 }
@@ -213,23 +219,23 @@ fn move_square(
         }
     }
 
-    for (mut rect, dir) in (&mut rects).iter().zip(dirs) {
-        if dir != Vec2::zero() {
-            rect.move_to(dir);
+    for (rect, dir) in (&mut rects).iter().zip(dirs) {
+        if dir != Vec2::ZERO {
+            rect.0.move_to(dir);
         }
     }
 }
 
-fn grow_square(mut rects: ViewMut<Rect>) {
+fn grow_square(mut rects: ViewMut<MyRect>) {
     for mut rect in (&mut rects).iter() {
-        rect.w = (rect.w + GROWTH_RATE).min(MAX_SIZE);
-        rect.h = (rect.h + GROWTH_RATE).min(MAX_SIZE);
+        rect.0.w = (rect.0.w + GROWTH_RATE).min(MAX_SIZE);
+        rect.0.h = (rect.0.h + GROWTH_RATE).min(MAX_SIZE);
     }
 }
 
 fn new_squares(
     mut entities: EntitiesViewMut,
-    mut rects: ViewMut<Rect>,
+    mut rects: ViewMut<MyRect>,
     mut accelerations: ViewMut<Acceleration>,
     mut squagums: ViewMut<Squagum>,
 ) {
@@ -250,7 +256,7 @@ fn new_squares(
 
 fn collision(
     mut player: UniqueViewMut<Player>,
-    rects: View<Rect>,
+    rects: View<MyRect>,
     squagums: View<Squagum>,
     mut to_delete: ViewMut<ToDelete>,
 ) {
@@ -266,12 +272,12 @@ fn collision(
     }
 
     for (id, rect) in rects.iter().with_id() {
-        if rect.w == MAX_SIZE
-            && rect.h == MAX_SIZE
-            && rect.x - rect.w / 2. <= player.rect.x + player.rect.w / 2.
-            && rect.x + rect.w / 2. >= player.rect.x - player.rect.w / 2.
-            && rect.y - rect.h / 2. <= player.rect.y + player.rect.h / 2.
-            && rect.y + rect.h / 2. >= player.rect.y - player.rect.h / 2.
+        if rect.0.w == MAX_SIZE
+            && rect.0.h == MAX_SIZE
+            && rect.0.x - rect.0.w / 2. <= player.rect.x + player.rect.w / 2.
+            && rect.0.x + rect.0.w / 2. >= player.rect.x - player.rect.w / 2.
+            && rect.0.y - rect.0.h / 2. <= player.rect.y + player.rect.h / 2.
+            && rect.0.y + rect.0.h / 2. >= player.rect.y - player.rect.h / 2.
         {
             if player.squagum {
                 player.rect.w = (player.rect.w + INIT_SIZE / 4.).min(MAX_SIZE - 0.01);
@@ -284,12 +290,12 @@ fn collision(
                 player.rect.w -= INIT_SIZE / 2.;
                 player.rect.h -= INIT_SIZE / 2.;
             }
-        } else if player.rect.x >= rect.w
-            && player.rect.h >= rect.h
-            && player.rect.x - player.rect.w / 2. <= rect.x + rect.w / 2.
-            && player.rect.x + player.rect.w / 2. >= rect.x - rect.w / 2.
-            && player.rect.y - player.rect.h / 2. <= rect.y + rect.h / 2.
-            && player.rect.y + player.rect.h / 2. >= rect.y - rect.h / 2.
+        } else if player.rect.x >= rect.0.w
+            && player.rect.h >= rect.0.h
+            && player.rect.x - player.rect.w / 2. <= rect.0.x + rect.0.w / 2.
+            && player.rect.x + player.rect.w / 2. >= rect.0.x - rect.0.w / 2.
+            && player.rect.y - player.rect.h / 2. <= rect.0.y + rect.0.h / 2.
+            && player.rect.y + player.rect.h / 2. >= rect.0.y - rect.0.h / 2.
         {
             player.rect.w = (player.rect.w + INIT_SIZE / 2.).min(MAX_SIZE - 0.01);
             player.rect.h = (player.rect.h + INIT_SIZE / 2.).min(MAX_SIZE - 0.01);
@@ -302,7 +308,7 @@ fn clean_up(mut all_storages: AllStoragesViewMut) -> Result<(), GameOver> {
     all_storages.delete_any::<SparseSet<ToDelete>>();
 
     let (player, rects) = all_storages
-        .borrow::<(UniqueView<Player>, View<Rect>)>()
+        .borrow::<(UniqueView<Player>, View<MyRect>)>()
         .unwrap();
 
     if player.rect.w < INIT_SIZE || player.rect.h < INIT_SIZE {
@@ -316,8 +322,8 @@ fn clean_up(mut all_storages: AllStoragesViewMut) -> Result<(), GameOver> {
     }
 }
 
-fn render(player: UniqueView<Player>, rects: View<Rect>, squagums: View<Squagum>) {
-    for rect in rects.iter() {
+fn render(player: UniqueView<Player>, rects: View<MyRect>, squagums: View<Squagum>) {
+    for MyRect(rect) in rects.iter() {
         draw_rectangle(
             rect.x - rect.w / 2.,
             rect.y - rect.h / 2.,

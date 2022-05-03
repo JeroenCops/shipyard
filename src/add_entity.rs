@@ -1,3 +1,4 @@
+use crate::component::Component;
 use crate::entity_id::EntityId;
 use crate::view::ViewMut;
 
@@ -7,31 +8,33 @@ pub trait AddEntity {
     type Component;
 
     /// Adds a new entity with `component`.
-    fn add_entity(&mut self, entity: EntityId, component: Self::Component);
+    fn add_entity(storage: &mut Self, entity: EntityId, component: Self::Component);
 }
 
 impl AddEntity for () {
     type Component = ();
 
     #[inline]
-    fn add_entity(&mut self, _: EntityId, _: Self::Component) {}
+    fn add_entity(_: &mut Self, _: EntityId, _: Self::Component) {}
 }
 
-impl<T: 'static> AddEntity for ViewMut<'_, T> {
+impl<T: Component> AddEntity for ViewMut<'_, T> {
     type Component = T;
 
     #[inline]
-    fn add_entity(&mut self, entity: EntityId, component: Self::Component) {
-        (&mut &mut *self).add_entity(entity, component);
+    fn add_entity(storage: &mut Self, entity: EntityId, component: Self::Component) {
+        AddEntity::add_entity(&mut &mut *storage, entity, component);
     }
 }
 
-impl<T: 'static> AddEntity for &mut ViewMut<'_, T> {
+impl<T: Component> AddEntity for &mut ViewMut<'_, T> {
     type Component = T;
 
     #[inline]
-    fn add_entity(&mut self, entity: EntityId, component: Self::Component) {
-        self.insert(entity, component);
+    fn add_entity(storage: &mut Self, entity: EntityId, component: Self::Component) {
+        storage
+            .sparse_set
+            .insert(entity, component, storage.current);
     }
 }
 
@@ -41,9 +44,9 @@ macro_rules! impl_view_add_entity {
             type Component = ($($type::Component,)+);
 
             #[inline]
-            fn add_entity(&mut self, entity: EntityId , components: Self::Component) {
+            fn add_entity(storages: &mut Self, entity: EntityId , components: Self::Component) {
                 $(
-                    self.$index.add_entity(entity, components.$index);
+                    AddEntity::add_entity(&mut storages.$index, entity, components.$index);
                 )+
             }
         }

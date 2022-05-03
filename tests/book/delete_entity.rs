@@ -1,3 +1,4 @@
+use super::U32;
 use shipyard::{AllStoragesViewMut, World};
 
 #[test]
@@ -6,7 +7,7 @@ fn world() {
 // ANCHOR: world
 let mut world = World::new();
 
-let id = world.add_entity((0u32,));
+let id = world.add_entity((U32(0),));
 
 world.delete_entity(id);
 // ANCHOR_END: world
@@ -18,10 +19,10 @@ fn view() {
 // ANCHOR: view
 let world = World::new();
 
-let mut all_storages = world.borrow::<AllStoragesViewMut>().unwrap();
+world.run(|mut all_storages: AllStoragesViewMut| {
+    let id = all_storages.add_entity((U32(0),));
 
-let id = all_storages.add_entity((0u32,));
-
-all_storages.delete_entity(id);
+    all_storages.delete_entity(id);
+});
 // ANCHOR_END: view
 }

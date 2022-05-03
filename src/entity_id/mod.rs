@@ -9,21 +9,24 @@ use core::num::NonZeroU64;
 // a generation of !0 is used as a dead entity
 //
 // inserted and modified component are flagged using metadata
-#[derive(Clone, Copy, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct EntityId(pub(super) NonZeroU64);
+
+/// Allows [`EntityId`] to be stored in collections requiring [`Default`], like `TinyVec`.
+impl Default for EntityId {
+    fn default() -> Self {
+        Self::dead()
+    }
+}
 
 impl EntityId {
     // Number of bits used by the generation
     const GEN_LEN: u64 = 16;
-    const META_LEN: u64 = 2;
-    const INDEX_LEN: u64 = 64 - (Self::GEN_LEN + Self::META_LEN);
+    const INDEX_LEN: u64 = 64 - Self::GEN_LEN;
     const INDEX_MASK: u64 = !(!0 << Self::INDEX_LEN);
-    const GEN_MASK: u64 = (!Self::INDEX_MASK) & (!Self::META_MASK);
-    const META_MASK: u64 = !(!0 >> Self::META_LEN);
-    const MAX_GEN: u64 = Self::GEN_MASK >> Self::INDEX_LEN;
-    const MODIFIED: u64 = 1 << (Self::INDEX_LEN + Self::GEN_LEN);
-    const INSERTED: u64 = 2 << (Self::INDEX_LEN + Self::GEN_LEN);
+    const GEN_MASK: u64 = !(!0 >> Self::GEN_LEN);
+    const MAX_GEN: u16 = u16::MAX - 1;
 
     /// Returns the index part of the `EntityId`.  
     /// ⚠️ You shouldn't use it to index a storage.
@@ -47,42 +50,23 @@ impl EntityId {
     }
     /// Returns the generation part of the `EntityId`.
     #[inline]
-    pub fn gen(self) -> u64 {
-        (self.0.get() & Self::GEN_MASK) >> Self::INDEX_LEN
+    pub fn gen(self) -> u16 {
+        ((self.0.get() & Self::GEN_MASK) >> Self::INDEX_LEN) as u16
     }
     /// Increments the generation, returns Err if gen + 1 == gen::MAX().
     #[inline]
     pub(super) fn bump_gen(&mut self) -> Result<(), ()> {
-        if self.gen() + 1 < Self::MAX_GEN - 1 {
+        if self.gen() < Self::MAX_GEN - 1 {
             // SAFE never zero
             self.0 = unsafe {
                 NonZeroU64::new_unchecked(
-                    (self.0.get() & !Self::GEN_MASK) | ((self.gen() + 1) << Self::INDEX_LEN),
+                    (self.0.get() & !Self::GEN_MASK)
+                        | (((self.gen() + 1) as u64) << Self::INDEX_LEN),
                 )
             };
             Ok(())
         } else {
             Err(())
-        }
-    }
-    #[inline]
-    pub(crate) fn is_modified(self) -> bool {
-        (self.0.get() & Self::META_MASK) == Self::MODIFIED
-    }
-    #[inline]
-    pub(crate) fn set_modified(&mut self) {
-        unsafe {
-            self.0 = NonZeroU64::new_unchecked((self.0.get() & !Self::META_MASK) | Self::MODIFIED);
-        }
-    }
-    #[inline]
-    pub(crate) fn is_inserted(self) -> bool {
-        (self.0.get() & Self::META_MASK) == Self::INSERTED
-    }
-    #[inline]
-    pub(crate) fn set_inserted(&mut self) {
-        unsafe {
-            self.0 = NonZeroU64::new_unchecked((self.0.get() & !Self::META_MASK) | Self::INSERTED);
         }
     }
     /// Make a new `EntityId` with the given index.
@@ -92,26 +76,20 @@ impl EntityId {
         // SAFE never zero
         EntityId(unsafe { NonZeroU64::new_unchecked(index + 1) })
     }
-
     #[inline]
-    pub(crate) fn new_from_parts(index: u64, gen: u16, meta: u8) -> Self {
+    pub(crate) const fn new_from_parts(index: u64, gen: u16) -> Self {
         assert!(index < Self::INDEX_MASK);
-        assert!(gen as u64 <= Self::max_gen());
-        assert!(
-            meta == 0
-                || meta as u64 == (Self::MODIFIED >> (Self::INDEX_LEN + Self::GEN_LEN))
-                || meta as u64 == (Self::INSERTED >> (Self::INDEX_LEN + Self::GEN_LEN))
-        );
+        assert!(gen <= Self::max_gen());
 
         EntityId(unsafe {
-            NonZeroU64::new_unchecked(
-                (index + 1)
-                    | (gen as u64) << Self::INDEX_LEN
-                    | (meta as u64) << (Self::INDEX_LEN + Self::GEN_LEN),
-            )
+            NonZeroU64::new_unchecked((index + 1) | (gen as u64) << Self::INDEX_LEN)
         })
     }
-
+    /// Build a new `EntityId` with the given index and generation.
+    #[inline]
+    pub const fn new_from_index_and_gen(index: u64, gen: u16) -> Self {
+        EntityId::new_from_parts(index, gen)
+    }
     #[cfg(test)]
     pub(crate) fn zero() -> Self {
         EntityId(NonZeroU64::new(1).unwrap())
@@ -134,9 +112,11 @@ impl EntityId {
     pub(crate) fn max_index() -> u64 {
         Self::INDEX_MASK - 1
     }
+    /// Maximum generation of a valid [`EntityId`].
+    /// A dead id will be above that.
     #[inline]
-    pub(crate) fn max_gen() -> u64 {
-        Self::GEN_MASK >> Self::INDEX_LEN
+    pub(crate) const fn max_gen() -> u16 {
+        Self::MAX_GEN
     }
     #[inline]
     pub(crate) fn is_dead(&self) -> bool {
@@ -161,15 +141,7 @@ impl EntityId {
     #[inline]
     pub(crate) fn copy_index_gen(&mut self, other: EntityId) {
         unsafe {
-            self.0 = NonZeroU64::new_unchecked(
-                (self.0.get() & Self::META_MASK) | (other.0.get() & !Self::META_MASK),
-            );
-        }
-    }
-    #[inline]
-    pub(crate) fn clear_meta(&mut self) {
-        unsafe {
-            self.0 = NonZeroU64::new_unchecked(self.0.get() & !Self::META_MASK);
+            self.0 = NonZeroU64::new_unchecked(self.0.get() | other.0.get());
         }
     }
     /// Returns `EntityId`'s inner representation.
@@ -184,44 +156,13 @@ impl EntityId {
     }
 }
 
-impl PartialEq for EntityId {
-    fn eq(&self, other: &Self) -> bool {
-        (self.0.get() & !Self::META_MASK) == (other.0.get() & !Self::META_MASK)
-    }
-}
-
-impl PartialOrd for EntityId {
-    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        let this = self.0.get() & !Self::META_MASK;
-        let other = other.0.get() & !Self::META_MASK;
-
-        this.partial_cmp(&other)
-    }
-}
-
-impl Ord for EntityId {
-    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        let this = self.0.get() & !Self::META_MASK;
-        let other = other.0.get() & !Self::META_MASK;
-
-        this.cmp(&other)
-    }
-}
-
-impl core::hash::Hash for EntityId {
-    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
-        state.write_u64(self.0.get() & !Self::META_MASK);
-    }
-}
-
 impl core::fmt::Debug for EntityId {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(
-            f,
-            "EntityId {{ index: {}, gen: {} }}",
-            self.index(),
-            self.gen()
-        )
+        if *self == EntityId::dead() {
+            f.write_str("EId(dead)")
+        } else {
+            write!(f, "EId({}.{})", self.index(), self.gen())
+        }
     }
 }
 

@@ -1,3 +1,4 @@
+use super::{U32, USIZE};
 use shipyard::{AllStoragesViewMut, Delete, EntitiesViewMut, ViewMut, World};
 
 #[test]
@@ -6,10 +7,10 @@ fn world() {
 // ANCHOR: world
 let mut world = World::new();
 
-let id = world.add_entity((0u32, 1usize));
+let id = world.add_entity((U32(0), USIZE(1)));
 
-world.delete_component::<(u32,)>(id);
-world.delete_component::<(u32, usize)>(id);
+world.delete_component::<(U32,)>(id);
+world.delete_component::<(U32, USIZE)>(id);
 // ANCHOR_END: world
 }
 
@@ -19,7 +20,7 @@ fn world_all() {
 // ANCHOR: world_all
 let mut world = World::new();
 
-let id = world.add_entity((0u32, 1usize));
+let id = world.add_entity((U32(0), USIZE(1)));
 
 world.strip(id);
 // ANCHOR_END: world_all
@@ -31,14 +32,14 @@ fn view() {
 // ANCHOR: view
 let world = World::new();
 
-let (mut entities, mut u32s, mut usizes) = world
-    .borrow::<(EntitiesViewMut, ViewMut<u32>, ViewMut<usize>)>()
-    .unwrap();
+world.run(
+    |mut entities: EntitiesViewMut, mut u32s: ViewMut<U32>, mut usizes: ViewMut<USIZE>| {
+        let id = entities.add_entity((&mut u32s, &mut usizes), (U32(0), USIZE(1)));
 
-let id = entities.add_entity((&mut u32s, &mut usizes), (0, 1));
-
-u32s.delete(id);
-(&mut u32s, &mut usizes).delete(id);
+        u32s.delete(id);
+        (&mut u32s, &mut usizes).delete(id);
+    },
+);
 // ANCHOR_END: view
 }
 
@@ -48,10 +49,10 @@ fn view_all() {
 // ANCHOR: view_all
 let world = World::new();
 
-let mut all_storages = world.borrow::<AllStoragesViewMut>().unwrap();
+world.run(|mut all_storages: AllStoragesViewMut| {
+    let id = all_storages.add_entity((U32(0), USIZE(1)));
 
-let id = all_storages.add_entity((0u32, 1usize));
-
-all_storages.strip(id);
+    all_storages.strip(id);
+});
 // ANCHOR_END: view_all
 }
