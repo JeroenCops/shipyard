@@ -62,8 +62,10 @@ mod timestamp;
 /// module related to storage tracking, like insertion or modification.
 pub mod track;
 mod tracking;
-mod type_id;
+/// module related to generating a identifier based on a type.
+pub mod type_id;
 mod unique;
+mod local;
 mod view;
 mod world;
 
@@ -85,7 +87,7 @@ pub use atomic_refcell::{ExclusiveBorrow, SharedBorrow};
 pub use atomic_refcell::{Ref, RefMut};
 #[doc(inline)]
 pub use borrow::{AllStoragesBorrow, Borrow, BorrowInfo, IntoBorrow, Mutability};
-pub use component::{Component, Unique};
+pub use component::{Component, Unique, Local};
 pub use contains::Contains;
 pub use delete::Delete;
 pub use entities::Entities;
@@ -100,10 +102,10 @@ pub use remove::Remove;
 pub use reserve::{BulkEntityIter, BulkReserve};
 pub use scheduler::{
     info, AsLabel, IntoWorkload, IntoWorkloadSystem, Label, ScheduledWorkload, Workload,
-    WorkloadBuilder, WorkloadSystem,
+    WorkloadSystem,
 };
 #[cfg(feature = "proc")]
-pub use shipyard_proc::{AllStoragesBorrow, Borrow, BorrowInfo, Component, Unique};
+pub use shipyard_proc::{AllStoragesBorrow, Borrow, BorrowInfo, Component, Unique, Local};
 pub use sparse_set::{
     BulkAddEntity, SparseArray, SparseSet, SparseSetDrain, TupleAddComponent, TupleDelete,
     TupleRemove,
@@ -114,8 +116,9 @@ pub use system::{AllSystem, Nothing, System};
 pub use timestamp::TrackingTimestamp;
 pub use tracking::{Inserted, InsertedOrModified, Modified};
 pub use unique::UniqueStorage;
+pub use local::LocalStorage;
 pub use view::{
     AllStoragesView, AllStoragesViewMut, EntitiesView, EntitiesViewMut, UniqueView, UniqueViewMut,
-    View, ViewMut,
+    LocalViewMut, View, ViewMut,
 };
 pub use world::World;

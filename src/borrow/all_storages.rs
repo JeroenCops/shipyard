@@ -387,7 +387,7 @@ impl<'a, T: Send + Sync + Unique> AllStoragesBorrow<'a> for UniqueViewMutBorrowe
         last_run: Option<u32>,
         current: u32,
     ) -> Result<Self::View, error::GetStorage> {
-        let view = all_storages.custom_storage_mut::<UniqueStorage<T>>()?;
+        let view = all_storages.custom_storage_mut::<UniqueStorage<T>>(None)?;
 
         let (unique, borrow) = unsafe { RefMut::destructure(view) };
 
@@ -410,7 +410,7 @@ impl<'a, T: Sync + Unique> AllStoragesBorrow<'a> for NonSend<UniqueViewMutBorrow
         last_run: Option<u32>,
         current: u32,
     ) -> Result<Self::View, error::GetStorage> {
-        let view = all_storages.custom_storage_mut::<UniqueStorage<T>>()?;
+        let view = all_storages.custom_storage_mut::<UniqueStorage<T>>(None)?;
 
         let (unique, borrow) = unsafe { RefMut::destructure(view) };
 
@@ -433,7 +433,7 @@ impl<'a, T: Send + Unique> AllStoragesBorrow<'a> for NonSync<UniqueViewMutBorrow
         last_run: Option<u32>,
         current: u32,
     ) -> Result<Self::View, error::GetStorage> {
-        let view = all_storages.custom_storage_mut::<UniqueStorage<T>>()?;
+        let view = all_storages.custom_storage_mut::<UniqueStorage<T>>(None)?;
 
         let (unique, borrow) = unsafe { RefMut::destructure(view) };
 
@@ -456,7 +456,7 @@ impl<'a, T: Unique> AllStoragesBorrow<'a> for NonSendSync<UniqueViewMutBorrower<
         last_run: Option<u32>,
         current: u32,
     ) -> Result<Self::View, error::GetStorage> {
-        let view = all_storages.custom_storage_mut::<UniqueStorage<T>>()?;
+        let view = all_storages.custom_storage_mut::<UniqueStorage<T>>(None)?;
 
         let (unique, borrow) = unsafe { RefMut::destructure(view) };
 

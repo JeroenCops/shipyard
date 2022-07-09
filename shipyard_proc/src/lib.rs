@@ -8,7 +8,7 @@ mod component_expand;
 use all_storages_borrow_expand::expand_all_storages_borrow;
 use borrow_expand::expand_borrow;
 use borrow_info_expand::expand_borrow_info;
-use component_expand::{expand_component, expand_unique};
+use component_expand::{expand_component, expand_unique, expand_local};
 
 #[proc_macro_derive(Component, attributes(track))]
 pub fn component(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
@@ -48,6 +48,27 @@ pub fn unique(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
         .find(|attr| attr.path.get_ident().map(ToString::to_string) == Some("track".to_string()));
 
     expand_unique(name, generics, attribute_input)
+        .unwrap_or_else(|err| err.to_compile_error())
+        .into()
+}
+
+#[proc_macro_derive(Local, attributes(track))]
+pub fn local(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let input = syn::parse_macro_input!(item as syn::DeriveInput);
+
+    let name = input.ident;
+    let generics = input.generics;
+
+    let attribute_input: Option<&syn::Attribute> = input
+        .attrs
+        .iter()
+        .filter(|attr| match attr.style {
+            syn::AttrStyle::Outer => true,
+            syn::AttrStyle::Inner(_) => false,
+        })
+        .find(|attr| attr.path.get_ident().map(ToString::to_string) == Some("track".to_string()));
+
+    expand_local(name, generics, attribute_input)
         .unwrap_or_else(|err| err.to_compile_error())
         .into()
 }

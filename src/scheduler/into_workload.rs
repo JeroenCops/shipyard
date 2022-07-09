@@ -1,45 +1,13 @@
-use crate::scheduler::{IntoWorkloadSystem, Label, WorkloadBuilder};
-use crate::view::AllStoragesView;
-use alloc::boxed::Box;
+use crate::info::Requirements;
+use crate::scheduler::workload::Workload;
+use crate::scheduler::AsLabel;
+use crate::scheduler::IntoWorkloadSystem;
+use crate::type_id::TypeId;
+use crate::WorkloadSystem;
 use alloc::vec::Vec;
 // macro not module
+use alloc::boxed::Box;
 use alloc::vec;
-
-impl crate::World {
-    /// Creates a new workload and store it in the [`World`](crate::World).
-    pub fn add_workload<Views, R, W, F: Fn() -> W + 'static>(&self, workload: F)
-    where
-        W: IntoWorkload<Views, R>,
-    {
-        let w = workload().into_workload();
-
-        WorkloadBuilder {
-            work_units: w.work_units,
-            name: Box::new(core::any::TypeId::of::<F>()),
-            skip_if: Vec::new(),
-        }
-        .add_to_world(self)
-        .unwrap();
-    }
-}
-
-/// A collection of system.
-pub struct Workload {
-    #[allow(unused)]
-    pub(super) name: Option<Box<dyn Label>>,
-    pub(super) work_units: Vec<super::builder::WorkUnit>,
-    #[allow(unused)]
-    pub(super) skip_if: Vec<Box<dyn Fn(AllStoragesView<'_>) -> bool + Send + Sync + 'static>>,
-}
-
-impl Workload {
-    /// Creates a new empty [`WorkloadBuilder`].
-    ///
-    /// [`WorkloadBuilder`]: crate::WorkloadBuilder
-    pub fn builder<L: Label>(label: L) -> WorkloadBuilder {
-        WorkloadBuilder::new(label)
-    }
-}
 
 /// Converts to a collection of systems.
 pub trait IntoWorkload<Views, R> {
@@ -113,34 +81,50 @@ pub trait IntoWorkload<Views, R> {
     /// assert_eq!(world.borrow::<View<Health>>().unwrap().len(), 900);
     /// ```
     fn into_workload(self) -> Workload;
+    /// When building a workload, this system or workload will be placed before all invocation of the other system or workload.
+    fn before_all<T>(self, other: impl AsLabel<T>) -> WorkloadSystem;
+    /// When building a workload, this system or workload will be placed after all invocation of the other system or workload.
+    fn after_all<T>(self, other: impl AsLabel<T>) -> WorkloadSystem;
 }
 
 impl IntoWorkload<(), ()> for Workload {
     fn into_workload(self) -> Workload {
         self
     }
+
+    fn before_all<T>(mut self, other: impl AsLabel<T>) -> WorkloadSystem {
+        self.before.add(other.as_label());
+
+        WorkloadSystem::Workload(self)
+    }
+
+    fn after_all<T>(mut self, other: impl AsLabel<T>) -> WorkloadSystem {
+        self.after.add(other.as_label());
+
+        WorkloadSystem::Workload(self)
+    }
 }
 
 impl<Views, R, Sys> IntoWorkload<Views, R> for Sys
 where
-    Sys: IntoWorkloadSystem<Views, R>,
+    Sys: IntoWorkloadSystem<Views, R> + 'static,
 {
     fn into_workload(self) -> Workload {
         Workload {
-            name: None,
+            name: Box::new(TypeId::of::<Sys>()),
             work_units: vec![self.into_workload_system().unwrap().into()],
             skip_if: Vec::new(),
+            before: Requirements::new(),
+            after: Requirements::new(),
         }
     }
-}
 
-impl IntoWorkload<(), ()> for WorkloadBuilder {
-    fn into_workload(self) -> Workload {
-        Workload {
-            name: Some(self.name),
-            work_units: self.work_units,
-            skip_if: self.skip_if,
-        }
+    fn before_all<T>(self, other: impl AsLabel<T>) -> WorkloadSystem {
+        self.into_workload().before_all(other)
+    }
+
+    fn after_all<T>(self, other: impl AsLabel<T>) -> WorkloadSystem {
+        self.into_workload().after_all(other)
     }
 }
 
@@ -149,14 +133,16 @@ macro_rules! impl_system {
         impl<$($type, $borrow, $return),+> IntoWorkload<($($borrow,)+), ($($return,)+)> for ($($type,)+)
         where
             $(
-                $type: IntoWorkload<$borrow, $return>,
+                $type: IntoWorkload<$borrow, $return> + 'static,
             )+
         {
             fn into_workload(self) -> Workload {
                 let mut workload = Workload {
-                    name: None,
+                    name: Box::new(TypeId::of::<($($type,)+)>()),
                     work_units: Vec::new(),
                     skip_if: Vec::new(),
+                    before: Requirements::new(),
+                    after: Requirements::new(),
                 };
 
                 $(
@@ -165,6 +151,14 @@ macro_rules! impl_system {
                 )+
 
                 workload
+            }
+
+            fn before_all<Label>(self, other: impl AsLabel<Label>) -> WorkloadSystem {
+                self.into_workload().before_all(other)
+            }
+
+            fn after_all<Label>(self, other: impl AsLabel<Label>) -> WorkloadSystem {
+                self.into_workload().after_all(other)
             }
         }
     };

@@ -2,6 +2,7 @@ use crate::all_storages::AllStorages;
 use crate::atomic_refcell::{Ref, RefMut};
 use crate::error;
 use crate::storage::{SBox, Storage, StorageId};
+use crate::type_id::TypeId;
 use core::any::type_name;
 
 /// Low level access to storage.
@@ -21,7 +22,7 @@ pub trait CustomStorageAccess {
         storage_id: StorageId,
     ) -> Result<Ref<'_, &'_ dyn Storage>, error::GetStorage>;
     /// Returns a [`RefMut`] to the requested `S` storage.
-    fn custom_storage_mut<S: 'static>(&self) -> Result<RefMut<'_, &'_ mut S>, error::GetStorage>;
+    fn custom_storage_mut<S: 'static>(&self, system_id: Option<TypeId>) -> Result<RefMut<'_, &'_ mut S>, error::GetStorage>;
     /// Returns a [`RefMut`] to the requested `S` storage using a [`StorageId`].
     ///
     /// [`RefMut`]: crate::atomic_refcell::RefMut
@@ -37,6 +38,7 @@ pub trait CustomStorageAccess {
     where
         S: 'static + Storage + Send + Sync,
         F: FnOnce() -> S;
+        
     /// Returns a [`Ref`] to the requested `S` storage using a [`StorageId`] and create it if it does not exist.
     ///
     /// [`Ref`]: crate::atomic_refcell::Ref
@@ -264,9 +266,15 @@ impl CustomStorageAccess for AllStorages {
         }
     }
     #[inline]
-    fn custom_storage_mut<S: 'static>(&self) -> Result<RefMut<'_, &'_ mut S>, error::GetStorage> {
+    fn custom_storage_mut<S: 'static>(&self, system_id: Option<TypeId>) -> Result<RefMut<'_, &'_ mut S>, error::GetStorage> {
         let storages = self.storages.read();
-        let storage = storages.get(&StorageId::of::<S>());
+        let mut storage_id = StorageId::of::<S>();
+
+        if let Some(system_id) = system_id {
+            storage_id = StorageId::local_of::<S>(system_id);
+        }
+
+        let storage = storages.get(&storage_id);
         if let Some(storage) = storage {
             let storage = unsafe { &*storage.0 }.borrow_mut();
             drop(storages);
@@ -276,14 +284,14 @@ impl CustomStorageAccess for AllStorages {
                 })),
                 Err(err) => Err(error::GetStorage::StorageBorrow {
                     name: Some(type_name::<S>()),
-                    id: StorageId::of::<S>(),
+                    id: storage_id,
                     borrow: err,
                 }),
             }
         } else {
             Err(error::GetStorage::MissingStorage {
                 name: Some(type_name::<S>()),
-                id: StorageId::of::<S>(),
+                id: storage_id,
             })
         }
     }

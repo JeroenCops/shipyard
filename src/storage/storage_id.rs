@@ -3,9 +3,12 @@ use core::cmp::Ordering;
 
 /// Id of a storage, can be a `TypeId` or `u64`.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde1", derive(serde::Serialize, serde::Deserialize))]
 pub enum StorageId {
     /// Identify a Rust type known at compile time
     TypeId(TypeId),
+    /// Identify a Rust type known at compile time
+    LocalId(TypeId, TypeId),
     /// Identify a type only known at runtime
     Custom(u64),
 }
@@ -14,6 +17,11 @@ impl StorageId {
     /// Returns `T`'s `StorageId`.
     pub fn of<T: 'static>() -> Self {
         TypeId::of::<T>().into()
+    }
+
+    /// Returns `S`'s and `T`'s local `StorageId`.
+    pub fn local_of<T: 'static>(system_id: TypeId) -> Self {
+        (system_id, TypeId::of::<T>()).into()
     }
 }
 
@@ -32,6 +40,14 @@ impl From<core::any::TypeId> for StorageId {
 impl From<u64> for StorageId {
     fn from(int: u64) -> Self {
         StorageId::Custom(int)
+    }
+}
+
+impl From<(TypeId, TypeId)> for StorageId {
+    fn from(local_id: (TypeId, TypeId)) -> Self {
+        let (system_id, type_id) = local_id;
+
+        StorageId::LocalId(system_id, type_id)
     }
 }
 
@@ -68,6 +84,11 @@ impl core::fmt::Debug for StorageId {
         match self {
             StorageId::TypeId(type_id) => {
                 debug_struct.field("TypeId", type_id);
+            }
+            StorageId::LocalId(system_id, type_id) => {
+                debug_struct
+                    .field("SystemId", system_id)
+                    .field("TypeId", type_id);
             }
             StorageId::Custom(custom) => {
                 debug_struct.field("Custom", custom);

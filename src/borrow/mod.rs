@@ -9,13 +9,15 @@ mod non_sync;
 
 use crate::all_storages::CustomStorageAccess;
 use crate::atomic_refcell::{Ref, RefMut};
-use crate::component::{Component, Unique};
+use crate::component::{Component, Unique, Local};
 use crate::error;
 use crate::sparse_set::SparseSet;
+use crate::type_id::TypeId;
 use crate::unique::UniqueStorage;
+use crate::local::LocalStorage;
 use crate::view::{
     AllStoragesView, AllStoragesViewMut, EntitiesView, EntitiesViewMut, UniqueView, UniqueViewMut,
-    View, ViewMut,
+    LocalViewMut, View, ViewMut,
 };
 use crate::world::World;
 pub use all_storages::AllStoragesBorrow;
@@ -29,7 +31,8 @@ pub use non_sync::NonSync;
 
 /// Describes if a storage is borrowed exclusively or not.  
 /// It is used to display workloads' borrowing information.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
+#[cfg_attr(feature = "serde1", derive(serde::Serialize, serde::Deserialize))]
 pub enum Mutability {
     #[allow(missing_docs)]
     Shared,
@@ -41,7 +44,7 @@ pub enum Mutability {
 ///
 /// ### Example of manual implementation:
 /// ```rust
-/// use shipyard::{IntoBorrow, View, UniqueView};
+/// use shipyard::{IntoBorrow, View, UniqueView, type_id::TypeId};
 ///
 /// # struct Camera {}
 /// # impl shipyard::Unique for Camera {
@@ -70,12 +73,13 @@ pub enum Mutability {
 /// #
 /// #     fn borrow(
 /// #         world: &'v shipyard::World,
+/// #         _system_id: Option<TypeId>,
 /// #         last_run: Option<u32>,
 /// #         current: u32,
 /// #     ) -> Result<Self::View, shipyard::error::GetStorage> {
 /// #         Ok(CameraView {
-/// #             camera: <UniqueView<'v, Camera> as IntoBorrow>::Borrow::borrow(world, last_run, current)?,
-/// #             position: <View<'v, Position> as IntoBorrow>::Borrow::borrow(world, last_run, current)?,
+/// #             camera: <UniqueView<'v, Camera> as IntoBorrow>::Borrow::borrow(world, None, last_run, current)?,
+/// #             position: <View<'v, Position> as IntoBorrow>::Borrow::borrow(world, None, last_run, current)?,
 /// #         })
 /// #     }
 /// # }
@@ -89,7 +93,7 @@ pub trait IntoBorrow {
 ///
 /// ### Example of manual implementation:
 /// ```rust
-/// use shipyard::{Borrow, IntoBorrow, View, UniqueView, World};
+/// use shipyard::{Borrow, IntoBorrow, View, UniqueView, World, type_id::TypeId};
 ///
 /// # struct Camera {}
 /// # impl shipyard::Unique for Camera {
@@ -113,12 +117,13 @@ pub trait IntoBorrow {
 ///
 ///     fn borrow(
 ///         world: &'v World,
+///         _system_id: Option<TypeId>,
 ///         last_run: Option<u32>,
 ///         current: u32,
 ///     ) -> Result<Self::View, shipyard::error::GetStorage> {
 ///         Ok(CameraView {
-///             camera: <UniqueView<'v, Camera> as IntoBorrow>::Borrow::borrow(world, last_run, current)?,
-///             position: <View<'v, Position> as IntoBorrow>::Borrow::borrow(world, last_run, current)?,
+///             camera: <UniqueView<'v, Camera> as IntoBorrow>::Borrow::borrow(world, None, last_run, current)?,
+///             position: <View<'v, Position> as IntoBorrow>::Borrow::borrow(world, None, last_run, current)?,
 ///         })
 ///     }
 /// }
@@ -130,6 +135,7 @@ pub trait Borrow<'a> {
     /// This function is where the actual borrowing happens.
     fn borrow(
         world: &'a World,
+        system_id: Option<TypeId>,
         last_run: Option<u32>,
         current: u32,
     ) -> Result<Self::View, error::GetStorage>;
@@ -147,6 +153,7 @@ impl<'a> Borrow<'a> for AllStoragesBorrower {
 
     fn borrow(
         world: &'a World,
+        _system_id: Option<TypeId>,
         _last_run: Option<u32>,
         _current: u32,
     ) -> Result<Self::View, error::GetStorage> {
@@ -171,6 +178,7 @@ impl<'a> Borrow<'a> for AllStoragesMutBorrower {
     #[inline]
     fn borrow(
         world: &'a World,
+        _system_id: Option<TypeId>,
         _last_run: Option<u32>,
         _current: u32,
     ) -> Result<Self::View, error::GetStorage> {
@@ -195,6 +203,7 @@ impl<'a> Borrow<'a> for UnitBorrower {
     #[inline]
     fn borrow(
         _: &'a World,
+        _system_id: Option<TypeId>,
         _last_run: Option<u32>,
         _current: u32,
     ) -> Result<Self::View, error::GetStorage>
@@ -218,6 +227,7 @@ impl<'a> Borrow<'a> for EntitiesBorrower {
     #[inline]
     fn borrow(
         world: &'a World,
+        _system_id: Option<TypeId>,
         _last_run: Option<u32>,
         _current: u32,
     ) -> Result<Self::View, error::GetStorage> {
@@ -255,6 +265,7 @@ impl<'a> Borrow<'a> for EntitiesMutBorrower {
     #[inline]
     fn borrow(
         world: &'a World,
+        _system_id: Option<TypeId>,
         _last_run: Option<u32>,
         _current: u32,
     ) -> Result<Self::View, error::GetStorage> {
@@ -298,6 +309,7 @@ where
     #[inline]
     fn borrow(
         world: &'a World,
+        _system_id: Option<TypeId>,
         last_run: Option<u32>,
         current: u32,
     ) -> Result<Self::View, error::GetStorage> {
@@ -345,6 +357,7 @@ where
     #[inline]
     fn borrow(
         world: &'a World,
+        _system_id: Option<TypeId>,
         last_run: Option<u32>,
         current: u32,
     ) -> Result<Self::View, error::GetStorage> {
@@ -391,6 +404,7 @@ where
     #[inline]
     fn borrow(
         world: &'a World,
+        _system_id: Option<TypeId>,
         last_run: Option<u32>,
         current: u32,
     ) -> Result<Self::View, error::GetStorage> {
@@ -431,6 +445,7 @@ impl<'a, T: Component> Borrow<'a> for NonSendSync<ViewBorrower<T>> {
     #[inline]
     fn borrow(
         world: &'a World,
+        _system_id: Option<TypeId>,
         last_run: Option<u32>,
         current: u32,
     ) -> Result<Self::View, error::GetStorage> {
@@ -478,6 +493,7 @@ where
     #[inline]
     fn borrow(
         world: &'a World,
+        _system_id: Option<TypeId>,
         last_run: Option<u32>,
         current: u32,
     ) -> Result<Self::View, error::GetStorage> {
@@ -525,6 +541,7 @@ where
     #[inline]
     fn borrow(
         world: &'a World,
+        _system_id: Option<TypeId>,
         last_run: Option<u32>,
         current: u32,
     ) -> Result<Self::View, error::GetStorage> {
@@ -571,6 +588,7 @@ where
     #[inline]
     fn borrow(
         world: &'a World,
+        _system_id: Option<TypeId>,
         last_run: Option<u32>,
         current: u32,
     ) -> Result<Self::View, error::GetStorage> {
@@ -611,6 +629,7 @@ impl<'a, T: Component> Borrow<'a> for NonSendSync<ViewMutBorrower<T>> {
     #[inline]
     fn borrow(
         world: &'a World,
+        _system_id: Option<TypeId>,
         last_run: Option<u32>,
         current: u32,
     ) -> Result<Self::View, error::GetStorage> {
@@ -652,6 +671,7 @@ impl<'a, T: Send + Sync + Unique> Borrow<'a> for UniqueViewBorrower<T> {
     #[inline]
     fn borrow(
         world: &'a World,
+        _system_id: Option<TypeId>,
         last_run: Option<u32>,
         current: u32,
     ) -> Result<Self::View, error::GetStorage> {
@@ -691,6 +711,7 @@ impl<'a, T: Sync + Unique> Borrow<'a> for NonSend<UniqueViewBorrower<T>> {
     #[inline]
     fn borrow(
         world: &'a World,
+        _system_id: Option<TypeId>,
         last_run: Option<u32>,
         current: u32,
     ) -> Result<Self::View, error::GetStorage> {
@@ -730,6 +751,7 @@ impl<'a, T: Send + Unique> Borrow<'a> for NonSync<UniqueViewBorrower<T>> {
     #[inline]
     fn borrow(
         world: &'a World,
+        _system_id: Option<TypeId>,
         last_run: Option<u32>,
         current: u32,
     ) -> Result<Self::View, error::GetStorage> {
@@ -769,6 +791,7 @@ impl<'a, T: Unique> Borrow<'a> for NonSendSync<UniqueViewBorrower<T>> {
     #[inline]
     fn borrow(
         world: &'a World,
+        _system_id: Option<TypeId>,
         last_run: Option<u32>,
         current: u32,
     ) -> Result<Self::View, error::GetStorage> {
@@ -809,6 +832,7 @@ impl<'a, T: Send + Sync + Unique> Borrow<'a> for UniqueViewMutBorrower<T> {
     #[inline]
     fn borrow(
         world: &'a World,
+        _system_id: Option<TypeId>,
         last_run: Option<u32>,
         current: u32,
     ) -> Result<Self::View, error::GetStorage> {
@@ -821,7 +845,7 @@ impl<'a, T: Send + Sync + Unique> Borrow<'a> for UniqueViewMutBorrower<T> {
             )
         };
 
-        let view = all_storages.custom_storage_mut::<UniqueStorage<T>>()?;
+        let view = all_storages.custom_storage_mut::<UniqueStorage<T>>(None)?;
 
         let (unique, borrow) = unsafe { RefMut::destructure(view) };
 
@@ -848,6 +872,7 @@ impl<'a, T: Sync + Unique> Borrow<'a> for NonSend<UniqueViewMutBorrower<T>> {
     #[inline]
     fn borrow(
         world: &'a World,
+        _system_id: Option<TypeId>,
         last_run: Option<u32>,
         current: u32,
     ) -> Result<Self::View, error::GetStorage> {
@@ -859,8 +884,8 @@ impl<'a, T: Sync + Unique> Borrow<'a> for NonSend<UniqueViewMutBorrower<T>> {
                     .map_err(error::GetStorage::AllStoragesBorrow)?,
             )
         };
-
-        let view = all_storages.custom_storage_mut::<UniqueStorage<T>>()?;
+        
+        let view = all_storages.custom_storage_mut::<UniqueStorage<T>>(None)?;
 
         let (unique, borrow) = unsafe { RefMut::destructure(view) };
 
@@ -887,6 +912,7 @@ impl<'a, T: Send + Unique> Borrow<'a> for NonSync<UniqueViewMutBorrower<T>> {
     #[inline]
     fn borrow(
         world: &'a World,
+        _system_id: Option<TypeId>,
         last_run: Option<u32>,
         current: u32,
     ) -> Result<Self::View, error::GetStorage> {
@@ -899,7 +925,7 @@ impl<'a, T: Send + Unique> Borrow<'a> for NonSync<UniqueViewMutBorrower<T>> {
             )
         };
 
-        let view = all_storages.custom_storage_mut::<UniqueStorage<T>>()?;
+        let view = all_storages.custom_storage_mut::<UniqueStorage<T>>(None)?;
 
         let (unique, borrow) = unsafe { RefMut::destructure(view) };
 
@@ -926,6 +952,7 @@ impl<'a, T: Unique> Borrow<'a> for NonSendSync<UniqueViewMutBorrower<T>> {
     #[inline]
     fn borrow(
         world: &'a World,
+        _system_id: Option<TypeId>,
         last_run: Option<u32>,
         current: u32,
     ) -> Result<Self::View, error::GetStorage> {
@@ -938,7 +965,7 @@ impl<'a, T: Unique> Borrow<'a> for NonSendSync<UniqueViewMutBorrower<T>> {
             )
         };
 
-        let view = all_storages.custom_storage_mut::<UniqueStorage<T>>()?;
+        let view = all_storages.custom_storage_mut::<UniqueStorage<T>>(None)?;
 
         let (unique, borrow) = unsafe { RefMut::destructure(view) };
 
@@ -953,6 +980,52 @@ impl<'a, T: Unique> Borrow<'a> for NonSendSync<UniqueViewMutBorrower<T>> {
     }
 }
 
+/// Helper struct allowing GAT-like behavior in stable.
+pub struct LocalViewMutBorrower<T>(T);
+
+impl<T: Send + Sync + Local> IntoBorrow for LocalViewMut<'_, T> {
+    type Borrow = LocalViewMutBorrower<T>;
+}
+
+impl<'a, T: Send + Sync + Local> Borrow<'a> for LocalViewMutBorrower<T> {
+    type View = LocalViewMut<'a, T>;
+
+    #[inline]
+    fn borrow(
+        world: &'a World,
+        system_id: Option<TypeId>,
+        last_run: Option<u32>,
+        current: u32,
+    ) -> Result<Self::View, error::GetStorage> {
+        let (all_storages, all_borrow) = unsafe {
+            Ref::destructure(
+                world
+                    .all_storages
+                    .borrow()
+                    .map_err(error::GetStorage::AllStoragesBorrow)?,
+            )
+        };
+
+        if let Some(system_id) = system_id {
+            all_storages.add_local(system_id, T::default());
+            let view = all_storages.custom_storage_mut::<LocalStorage<T>>(Some(system_id))?;
+    
+            let (local, borrow) = unsafe { RefMut::destructure(view) };
+    
+            Ok(LocalViewMut {
+                last_insert: last_run.unwrap_or(local.last_insert),
+                last_modification: last_run.unwrap_or(local.last_modification),
+                current,
+                local,
+                _borrow: Some(borrow),
+                _all_borrow: Some(all_borrow),
+            })
+        } else {
+            Err(error::GetStorage::LocalWorldBorrow)
+        }
+    }
+}
+
 impl<T: IntoBorrow> IntoBorrow for Option<T> {
     type Borrow = Option<T::Borrow>;
 }
@@ -963,10 +1036,11 @@ impl<'a, T: Borrow<'a>> Borrow<'a> for Option<T> {
     #[inline]
     fn borrow(
         world: &'a World,
+        system_id: Option<TypeId>,
         last_run: Option<u32>,
         current: u32,
     ) -> Result<Self::View, error::GetStorage> {
-        Ok(T::borrow(world, last_run, current).ok())
+        Ok(T::borrow(world, system_id, last_run, current).ok())
     }
 }
 
@@ -980,8 +1054,8 @@ macro_rules! impl_world_borrow {
             type View = ($($type::View,)+);
 
             #[inline]
-            fn borrow(world: &'a World, last_run: Option<u32>, current: u32) -> Result<Self::View, error::GetStorage> {
-                Ok(($($type::borrow(world, last_run, current)?,)+))
+            fn borrow(world: &'a World, system_id: Option<TypeId>, last_run: Option<u32>, current: u32) -> Result<Self::View, error::GetStorage> {
+                Ok(($($type::borrow(world, system_id, last_run, current)?,)+))
             }
         }
     }

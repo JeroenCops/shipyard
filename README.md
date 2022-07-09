@@ -10,20 +10,19 @@ If you have any question or want to follow the development more closely <sub>[![
 [![Documentation](https://docs.rs/shipyard/badge.svg)](https://docs.rs/shipyard/0.5.0)
 [![LICENSE](https://img.shields.io/crates/l/shipyard)](LICENSE-APACHE)
 
-<<<<<<< HEAD
-### [Guide](https://leudz.github.io/shipyard/guide/0.5.0) | [Demo](https://leudz.github.io/shipyard/bunny_demo)
-=======
+
 ### [Guide Master](https://leudz.github.io/shipyard/guide/master) | [Guide 0.5](https://leudz.github.io/shipyard/guide/0.5.0) | [Demo](https://leudz.github.io/shipyard/bunny_demo)
->>>>>>> upstream/master
 
 </div>
 
 ## Basic Example <!-- omit in toc -->
 
 ```rust
-use shipyard::{IntoIter, View, ViewMut, World};
+use shipyard::{Component, IntoIter, View, ViewMut, World};
 
+#[derive(Component)]
 struct Health(u32);
+#[derive(Component)]
 struct Position {
     x: f32,
     y: f32,
@@ -48,7 +47,7 @@ fn main() {
 
     world.add_entity((Position { x: 0.0, y: 0.0 }, Health(1000)));
 
-    world.run(in_acid).unwrap();
+    world.run(in_acid);
 }
 ```
 

@@ -1,7 +1,8 @@
-use super::{TypeInfo, WorkloadSystem};
 use crate::all_storages::AllStorages;
 use crate::borrow::{Borrow, BorrowInfo, IntoBorrow, Mutability};
 use crate::error;
+use crate::scheduler::workload::Workload;
+use crate::scheduler::{TypeInfo, WorkloadSystem};
 use crate::storage::StorageId;
 use crate::type_id::TypeId;
 use crate::World;
@@ -40,11 +41,17 @@ pub trait IntoWorkloadSystem<B, R> {
 
 pub struct Nothing;
 
-impl<R, F> IntoWorkloadSystem<Nothing, R> for F
+impl<R: 'static, F> IntoWorkloadSystem<Nothing, R> for F
 where
     F: 'static + Send + Sync + Fn() -> R,
 {
     fn into_workload_system(self) -> Result<WorkloadSystem, error::InvalidSystem> {
+        let system_type_name = type_name::<F>();
+
+        if TypeId::of::<R>() == TypeId::of::<Workload>() {
+            return Err(error::InvalidSystem::WorkloadUsedAsSystem(system_type_name));
+        }
+
         Ok(WorkloadSystem::System {
             borrow_constraints: Vec::new(),
             system_fn: Box::new(move |_: &World| {
@@ -52,7 +59,7 @@ where
                 Ok(())
             }),
             system_type_id: TypeId::of::<F>(),
-            system_type_name: type_name::<F>(),
+            system_type_name,
             generator: |_| TypeId::of::<F>(),
         })
     }
@@ -63,6 +70,12 @@ where
     where
         R: Into<Result<Ok, Err>>,
     {
+        let system_type_name = type_name::<F>();
+
+        if TypeId::of::<R>() == TypeId::of::<Workload>() {
+            return Err(error::InvalidSystem::WorkloadUsedAsSystem(system_type_name));
+        }
+
         Ok(WorkloadSystem::System {
             borrow_constraints: Vec::new(),
             system_fn: Box::new(move |_: &World| {
@@ -70,7 +83,7 @@ where
                 Ok(())
             }),
             system_type_id: TypeId::of::<F>(),
-            system_type_name: type_name::<F>(),
+            system_type_name,
             generator: |_| TypeId::of::<F>(),
         })
     }
@@ -81,6 +94,12 @@ where
     where
         R: Into<Result<Ok, Err>>,
     {
+        let system_type_name = type_name::<F>();
+
+        if TypeId::of::<R>() == TypeId::of::<Workload>() {
+            return Err(error::InvalidSystem::WorkloadUsedAsSystem(system_type_name));
+        }
+
         Ok(WorkloadSystem::System {
             borrow_constraints: Vec::new(),
             system_fn: Box::new(move |_: &World| {
@@ -88,7 +107,7 @@ where
                 Ok(())
             }),
             system_type_id: TypeId::of::<F>(),
-            system_type_name: type_name::<F>(),
+            system_type_name,
             generator: |_| TypeId::of::<F>(),
         })
     }
@@ -120,13 +139,14 @@ macro_rules! impl_system {
                 + Fn($(<$type::Borrow as Borrow<'a>>::View),+) -> R {
 
             fn into_workload_system(self) -> Result<WorkloadSystem, error::InvalidSystem> {
+                let system_id = TypeId::of::<Func>();
                 let mut borrows = Vec::new();
                 $(
-                    $type::borrow_info(&mut borrows);
+                    $type::borrow_info(&mut borrows, Some(system_id));
                 )+
 
                 if borrows.contains(&TypeInfo {
-                    name: "",
+                    name: "".into(),
                     storage_id: StorageId::of::<AllStorages>(),
                     mutability: Mutability::Exclusive,
                     thread_safe: true,
@@ -160,13 +180,15 @@ macro_rules! impl_system {
                     system_fn: Box::new(move |world: &World| {
                         let current = world.get_current();
                         let last_run = last_run.swap(current, Ordering::Acquire);
-                        Ok(drop((&&self)($($type::Borrow::borrow(&world, Some(last_run), current)?),+)))
+                        let system_id = TypeId::of::<Func>();
+                        Ok(drop((&&self)($($type::Borrow::borrow(&world, Some(system_id), Some(last_run), current)?),+)))
                     }),
                     system_type_id: TypeId::of::<Func>(),
                     system_type_name: type_name::<Func>(),
                     generator: |constraints| {
+                        let system_id = TypeId::of::<Func>();
                         $(
-                            $type::borrow_info(constraints);
+                            $type::borrow_info(constraints, Some(system_id));
                         )+
 
                         TypeId::of::<Func>()
@@ -175,13 +197,14 @@ macro_rules! impl_system {
             }
             #[cfg(feature = "std")]
             fn into_workload_try_system<Ok, Err: Into<Box<dyn Error + Send + Sync>>>(self) -> Result<WorkloadSystem, error::InvalidSystem> where R: Into<Result<Ok, Err>> {
+                let system_id = TypeId::of::<Func>();
                 let mut borrows = Vec::new();
                 $(
-                    $type::borrow_info(&mut borrows);
+                    $type::borrow_info(&mut borrows, Some(system_id));
                 )+
 
                 if borrows.contains(&TypeInfo {
-                    name: "",
+                    name: "".into(),
                     storage_id: StorageId::of::<AllStorages>(),
                     mutability: Mutability::Exclusive,
                     thread_safe: true,
@@ -215,13 +238,15 @@ macro_rules! impl_system {
                     system_fn: Box::new(move |world: &World| {
                         let current = world.get_current();
                         let last_run = last_run.swap(current, Ordering::Acquire);
-                        Ok(drop((&&self)($($type::Borrow::borrow(&world, Some(last_run), current)?),+).into().map_err(error::Run::from_custom)?))
+                        let system_id = TypeId::of::<Func>();
+                        Ok(drop((&&self)($($type::Borrow::borrow(&world, Some(system_id), Some(last_run), current)?),+).into().map_err(error::Run::from_custom)?))
                     }),
                     system_type_id: TypeId::of::<Func>(),
                     system_type_name: type_name::<Func>(),
                     generator: |constraints| {
+                        let system_id = TypeId::of::<Func>();
                         $(
-                            $type::borrow_info(constraints);
+                            $type::borrow_info(constraints, Some(system_id));
                         )+
 
                         TypeId::of::<Func>()
@@ -230,13 +255,14 @@ macro_rules! impl_system {
             }
             #[cfg(not(feature = "std"))]
             fn into_workload_try_system<Ok, Err: 'static + Send + Any>(self) -> Result<WorkloadSystem, error::InvalidSystem> where R: Into<Result<Ok, Err>> {
+                let system_id = TypeId::of::<Func>();
                 let mut borrows = Vec::new();
                 $(
-                    $type::borrow_info(&mut borrows);
+                    $type::borrow_info(&mut borrows, Some(system_id));
                 )+
 
                 if borrows.contains(&TypeInfo {
-                    name: "",
+                    name: "".into(),
                     storage_id: StorageId::of::<AllStorages>(),
                     mutability: Mutability::Exclusive,
                     thread_safe: true,
@@ -270,12 +296,15 @@ macro_rules! impl_system {
                     system_fn: Box::new(move |world: &World| {
                         let current = world.get_current();
                         let last_run = last_run.swap(current, Ordering::Acquire);
-                        Ok(drop((&&self)($($type::Borrow::borrow(&world, Some(last_run), current)?),+).into().map_err(error::Run::from_custom)?))
-                    }),                    system_type_id: TypeId::of::<Func>(),
+                        let system_id = TypeId::of::<Func>();
+                        Ok(drop((&&self)($($type::Borrow::borrow(&world, Some(system_id), Some(last_run), current)?),+).into().map_err(error::Run::from_custom)?))
+                    }),                    
+                    system_type_id: TypeId::of::<Func>(),
                     system_type_name: type_name::<Func>(),
                     generator: |constraints| {
+                        let system_id = TypeId::of::<Func>();
                         $(
-                            $type::borrow_info(constraints);
+                            $type::borrow_info(constraints, Some(system_id));
                         )+
 
                         TypeId::of::<Func>()

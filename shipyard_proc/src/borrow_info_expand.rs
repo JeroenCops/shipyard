@@ -52,14 +52,14 @@ pub(crate) fn expand_borrow_info(
                         quote!(();)
                     } else {
                         quote!(
-                            <#field_type>::borrow_info(info);
+                            <#field_type>::borrow_info(info, system_id);
                         )
                     }
                 });
 
             Ok(quote!(
                 unsafe impl #impl_generics ::shipyard::BorrowInfo for #name #ty_generics #where_clause {
-                    fn borrow_info(info: &mut Vec<::shipyard::info::TypeInfo>) {
+                    fn borrow_info(info: &mut Vec<::shipyard::info::TypeInfo>, system_id: Option<::shipyard::type_id::TypeId>) {
                         #(#field)*
                     }
                 }
@@ -70,8 +70,8 @@ pub(crate) fn expand_borrow_info(
 
             Ok(quote!(
                 unsafe impl #impl_generics ::shipyard::BorrowInfo for #name #ty_generics #where_clause {
-                    fn borrow_info(info: &mut Vec<::shipyard::info::TypeInfo>) {
-                        #(<#field_type>::borrow_info(info);)*
+                    fn borrow_info(info: &mut Vec<::shipyard::info::TypeInfo>, system_id: Option<::shipyard::type_id::TypeId>) {
+                        #(<#field_type>::borrow_info(info, system_id);)*
                     }
                 }
             ))

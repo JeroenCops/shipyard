@@ -48,7 +48,7 @@ macro_rules! impl_system {
         {
             fn run(self, _: (), world: &'s World) -> Result<Return, error::GetStorage> {
                 let current = world.get_current();
-                Ok((self)($($type::Borrow::borrow(world, None, current)?,)+))
+                Ok((self)($($type::Borrow::borrow(world, None, None, current)?,)+))
             }
         }
 
@@ -59,7 +59,7 @@ macro_rules! impl_system {
         {
             fn run(self, (data,): (Data,), world: &'s World) -> Result<Return, error::GetStorage> {
                 let current = world.get_current();
-                Ok((self)(data, $($type::Borrow::borrow(world, None, current)?,)+))
+                Ok((self)(data, $($type::Borrow::borrow(world, None, None, current)?,)+))
             }
         }
     }

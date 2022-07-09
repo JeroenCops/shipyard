@@ -8,7 +8,8 @@ pub use retain::TupleRetain;
 
 use crate::atomic_refcell::{AtomicRefCell, Ref, RefMut};
 use crate::borrow::{AllStoragesBorrow, Borrow, IntoBorrow};
-use crate::component::Unique;
+use crate::type_id::TypeId;
+use crate::component::{Unique, Local};
 use crate::entities::Entities;
 use crate::entity_id::EntityId;
 use crate::memory_usage::AllStoragesMemoryUsage;
@@ -17,7 +18,7 @@ use crate::public_transport::ShipyardRwLock;
 use crate::reserve::BulkEntityIter;
 use crate::sparse_set::{BulkAddEntity, TupleAddComponent, TupleDelete, TupleRemove};
 use crate::storage::{SBox, Storage, StorageId};
-use crate::{error, UniqueStorage};
+use crate::{error, UniqueStorage, LocalStorage};
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 use core::any::type_name;
@@ -210,6 +211,22 @@ impl AllStorages {
             Ok(unique.into_inner().value)
         }
     }
+    /// Adds a new local storage, local storages store exactly one `T` for each system.  
+    /// To access a local storage value, use [`LocalView`] or [`LocalViewMut`] in a system.  
+    /// Does nothing if the storage already exists.
+    /// 
+    /// [`UniqueView`]: crate::UniqueView
+    /// [`UniqueViewMut`]: crate::UniqueViewMut
+    pub (crate) fn add_local<T: Send + Sync + Local>(&self, system_id: TypeId, component: T) {
+        let storage_id = StorageId::local_of::<LocalStorage<T>>(system_id);
+
+        self.storages.write().entry(storage_id).or_insert_with(|| {
+            SBox::new(LocalStorage::new(
+                component,
+                self.get_tracking_timestamp().0,
+            ))
+        });
+    }
     /// Delete an entity and all its components.
     /// Returns `true` if `entity` was alive.
     ///
@@ -312,7 +329,7 @@ impl AllStorages {
         let current = self.get_current();
 
         for (storage_id, storage) in self.storages.get_mut().iter_mut() {
-            if !excluded_storage.contains(&*storage_id) {
+            if !excluded_storage.contains(storage_id) {
                 unsafe { &mut *storage.0 }.get_mut().delete(entity, current);
             }
         }

@@ -6,6 +6,7 @@ use crate::scheduler::Label;
 use crate::storage::StorageId;
 use alloc::borrow::Cow;
 use alloc::boxed::Box;
+use alloc::vec::Vec;
 use core::fmt::{Debug, Display, Formatter};
 #[cfg(feature = "std")]
 use std::error::Error;
@@ -29,12 +30,14 @@ impl Error for Borrow {}
 impl Debug for Borrow {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), core::fmt::Error> {
         match self {
-            Self::Unique => f.write_str("Cannot mutably borrow while already borrowed."),
-            Self::Shared => f.write_str("Cannot immutably borrow while already mutably borrowed."),
-            Self::WrongThread => {
+            Borrow::Unique => f.write_str("Cannot mutably borrow while already borrowed."),
+            Borrow::Shared => {
+                f.write_str("Cannot immutably borrow while already mutably borrowed.")
+            }
+            Borrow::WrongThread => {
                 f.write_str("Can't access from another thread because it's !Send and !Sync.")
             }
-            Self::MultipleThreads => f.write_str(
+            Borrow::MultipleThreads => f.write_str(
                 "Can't access from multiple threads at the same time because it's !Sync.",
             ),
         }
@@ -64,6 +67,8 @@ pub enum GetStorage {
         name: Option<&'static str>,
         id: StorageId,
     },
+    /// Error returned when borrowing a local storage on the world.
+    LocalWorldBorrow,
     /// Error returned by a custom view.
     #[cfg(feature = "std")]
     Custom(Box<dyn Error + Send + Sync>),
@@ -75,41 +80,43 @@ pub enum GetStorage {
 impl GetStorage {
     #[cfg(feature = "std")]
     #[allow(missing_docs)]
-    pub fn from_custom<E: Into<Box<dyn Error + Send + Sync>>>(error: E) -> Self {
+    pub fn from_custom<E: Into<Box<dyn Error + Send + Sync>>>(error: E) -> GetStorage {
         GetStorage::Custom(error.into())
     }
     #[cfg(not(feature = "std"))]
     #[allow(missing_docs)]
-    pub fn from_custom<E: core::any::Any + Send>(error: E) -> Self {
+    pub fn from_custom<E: core::any::Any + Send>(error: E) -> GetStorage {
         GetStorage::Custom(Box::new(error))
     }
 }
 
 impl PartialEq for GetStorage {
-    fn eq(&self, other: &Self) -> bool {
+    fn eq(&self, other: &GetStorage) -> bool {
         match (self, other) {
-            (Self::AllStoragesBorrow(l_borrow), Self::AllStoragesBorrow(r_borrow)) => {
+            (GetStorage::AllStoragesBorrow(l_borrow), GetStorage::AllStoragesBorrow(r_borrow)) => {
                 l_borrow == r_borrow
             }
             (
-                Self::StorageBorrow {
+                GetStorage::StorageBorrow {
                     name: l_name,
                     id: l_id,
                     borrow: l_borrow,
                 },
-                Self::StorageBorrow {
+                GetStorage::StorageBorrow {
                     name: r_name,
                     id: r_id,
                     borrow: r_borrow,
                 },
             ) => l_name == r_name && l_id == r_id && l_borrow == r_borrow,
-            (Self::Entities(l_borrow), Self::Entities(r_borrow)) => l_borrow == r_borrow,
+            (GetStorage::Entities(l_borrow), GetStorage::Entities(r_borrow)) => {
+                l_borrow == r_borrow
+            }
             (
-                Self::MissingStorage {
+                GetStorage::MissingStorage {
                     name: l_name,
                     id: l_id,
                 },
-                Self::MissingStorage {
+                GetStorage::MissingStorage {
                     name: r_name,
                     id: r_id,
                 },
@@ -125,14 +132,14 @@ impl Error for GetStorage {}
 impl Debug for GetStorage {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), core::fmt::Error> {
         match self {
-            Self::AllStoragesBorrow(borrow) => match borrow {
+            GetStorage::AllStoragesBorrow(borrow) => match borrow {
                 Borrow::Unique => f.write_str("Cannot mutably borrow AllStorages while it's already borrowed (AllStorages is borrowed to access any storage)."),
                 Borrow::Shared => {
                     f.write_str("Cannot immutably borrow AllStorages while it's already mutably borrowed.")
                 },
                 _ => unreachable!(),
             },
-            Self::StorageBorrow {name, id, borrow} => if let Some(name) = name {
+            GetStorage::StorageBorrow {name, id, borrow} => if let Some(name) = name {
                 match borrow {
                     Borrow::Unique => f.write_fmt(format_args!("Cannot mutably borrow {} storage while it's already borrowed.", name)),
                     Borrow::Shared => {
@@ -151,19 +158,22 @@ impl Debug for GetStorage {
                     Borrow::WrongThread => f.write_fmt(format_args!("Cannot borrow {:?} storage from other thread than the one it was created in because it's !Send and !Sync.", id)),
                 }
             }
-            Self::Entities(borrow) => match borrow {
+            GetStorage::Entities(borrow) => match borrow {
                 Borrow::Unique => f.write_str("Cannot mutably borrow Entities storage while it's already borrowed."),
                 Borrow::Shared => {
                     f.write_str("Cannot immutably borrow Entities storage while it's already mutably borrowed.")
                 },
                 _ => unreachable!(),
             },
-            Self::MissingStorage { name, id } => if let Some(name) = name {
+            GetStorage::MissingStorage { name, id } => if let Some(name) = name {
                 f.write_fmt(format_args!("{} storage was not found in the World. You can register unique storage with: world.add_unique(your_unique);", name))
             } else {
                 f.write_fmt(format_args!("{:?} storage was not found in the World. You can register unique storage with: world.add_unique(your_unique);", id))
             }
-            Self::Custom(err) => {
+            GetStorage::LocalWorldBorrow => {
+                f.write_fmt(format_args!("Cannot borrow a storage locally on the World."))
+            }
+            GetStorage::Custom(err) => {
                 f.write_fmt(format_args!("Storage borrow failed with a custom error, {:?}.", err))
             }
         }
@@ -191,14 +201,14 @@ impl Error for NewEntity {}
 impl Debug for NewEntity {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), core::fmt::Error> {
         match self {
-            Self::AllStoragesBorrow(borrow) => match borrow {
+            NewEntity::AllStoragesBorrow(borrow) => match borrow {
                 Borrow::Unique => f.write_str("Cannot mutably borrow all storages while it's already borrowed (this include component storage)."),
                 Borrow::Shared => {
                     f.write_str("Cannot immutably borrow all storages while it's already mutably borrowed.")
                 },
                 _ => unreachable!(),
             },
-            Self::Entities(borrow) => match borrow {
+            NewEntity::Entities(borrow) => match borrow {
                 Borrow::Unique => f.write_str("Cannot mutably borrow entities while it's already borrowed."),
                 _ => unreachable!(),
             },
@@ -228,7 +238,9 @@ impl Error for AddComponent {}
 impl Debug for AddComponent {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), core::fmt::Error> {
         match self {
-            Self::EntityIsNotAlive => f.write_str("Entity has to be alive to add component to it."),
+            AddComponent::EntityIsNotAlive => {
+                f.write_str("Entity has to be alive to add component to it.")
+            }
         }
     }
 }
@@ -239,9 +251,9 @@ impl Display for AddComponent {
     }
 }
 
-/// Error type returned by [`WorkloadBuilder::add_to_world`].
+/// Error type returned by [`Workload::add_to_world`].
 ///
-/// [`WorkloadBuilder::add_to_world`]: crate::WorkloadBuilder::add_to_world()
+/// [`Workload::add_to_world`]: crate::Workload::add_to_world()
 #[derive(Clone, Eq)]
 pub enum AddWorkload {
     /// A workload with the same name already exists.
@@ -250,13 +262,20 @@ pub enum AddWorkload {
     Borrow,
     /// Unknown nested workload.
     UnknownWorkload(Box<dyn Label>, Box<dyn Label>),
+    /// This workload cannot be created.
+    ImpossibleRequirements(ImpossibleRequirements),
 }
 
 // For some reason this trait can't be derived with Box<dyn Label>
 impl PartialEq for AddWorkload {
-    fn eq(&self, other: &Self) -> bool {
+    fn eq(&self, other: &AddWorkload) -> bool {
         match (self, other) {
-            (Self::UnknownWorkload(l0, l1), Self::UnknownWorkload(r0, r1)) => l0 == r0 && l1 == r1,
+            (AddWorkload::UnknownWorkload(l0, l1), AddWorkload::UnknownWorkload(r0, r1)) => {
+                l0 == r0 && l1 == r1
+            }
+            (AddWorkload::ImpossibleRequirements(l0), AddWorkload::ImpossibleRequirements(r0)) => {
+                l0 == r0
+            }
             _ => core::mem::discriminant(self) == core::mem::discriminant(other),
         }
     }
@@ -268,14 +287,15 @@ impl Error for AddWorkload {}
 impl Debug for AddWorkload {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), core::fmt::Error> {
         match self {
-            Self::AlreadyExists => f.write_str("A workload with this name already exists."),
-            Self::Borrow => {
+            AddWorkload::AlreadyExists => f.write_str("A workload with this name already exists."),
+            AddWorkload::Borrow => {
                 f.write_str("Cannot mutably borrow the scheduler while it's already borrowed.")
             }
-            Self::UnknownWorkload(workload, unknown_workload) => f.write_fmt(format_args!(
+            AddWorkload::UnknownWorkload(workload, unknown_workload) => f.write_fmt(format_args!(
                 "Could not find {:?} workload while building {:?}'s batches.",
                 unknown_workload, workload
             )),
+            AddWorkload::ImpossibleRequirements(err) => Debug::fmt(err, f),
         }
     }
 }
@@ -301,10 +321,12 @@ impl Error for SetDefaultWorkload {}
 impl Debug for SetDefaultWorkload {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), core::fmt::Error> {
         match self {
-            Self::Borrow => {
+            SetDefaultWorkload::Borrow => {
                 f.write_str("Cannot mutably borrow scheduler while it's already borrowed.")
             }
-            Self::MissingWorkload => f.write_str("No workload with this name exists."),
+            SetDefaultWorkload::MissingWorkload => {
+                f.write_str("No workload with this name exists.")
+            }
         }
     }
 }
@@ -334,7 +356,7 @@ impl RunWorkload {
     #[cfg(feature = "std")]
     pub fn custom_error(self) -> Option<Box<dyn Error + Send + Sync>> {
         match self {
-            Self::Run((_, Run::Custom(error))) => Some(error),
+            RunWorkload::Run((_, Run::Custom(error))) => Some(error),
             _ => None,
         }
     }
@@ -342,7 +364,7 @@ impl RunWorkload {
     #[cfg(not(feature = "std"))]
     pub fn custom_error(self) -> Option<Box<dyn core::any::Any + Send>> {
         match self {
-            Self::Run((_, Run::Custom(error))) => Some(error),
+            RunWorkload::Run((_, Run::Custom(error))) => Some(error),
             _ => None,
         }
     }
@@ -354,11 +376,11 @@ impl Error for RunWorkload {}
 impl Debug for RunWorkload {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), core::fmt::Error> {
         match self {
-            Self::Scheduler => {
+            RunWorkload::Scheduler => {
                 f.write_str("Cannot borrow the scheduler while it's already mutably borrowed.")
             }
-            Self::MissingWorkload => f.write_str("No workload with this name exists."),
-            Self::Run((system_name, run)) => {
+            RunWorkload::MissingWorkload => f.write_str("No workload with this name exists."),
+            RunWorkload::Run((system_name, run)) => {
                 f.write_fmt(format_args!("System {} failed: {:?}", system_name, run))
             }
         }
@@ -388,7 +410,7 @@ pub enum Run {
 }
 
 impl From<GetStorage> for Run {
-    fn from(get_storage: GetStorage) -> Self {
+    fn from(get_storage: GetStorage) -> Run {
         Run::GetStorage(get_storage)
     }
 }
@@ -396,20 +418,20 @@ impl From<GetStorage> for Run {
 impl Run {
     #[cfg(feature = "std")]
     #[allow(missing_docs)]
-    pub fn from_custom<E: Into<Box<dyn Error + Send + Sync>>>(error: E) -> Self {
+    pub fn from_custom<E: Into<Box<dyn Error + Send + Sync>>>(error: E) -> Run {
         Run::Custom(error.into())
     }
     #[cfg(not(feature = "std"))]
     #[allow(missing_docs)]
-    pub fn from_custom<E: core::any::Any + Send>(error: E) -> Self {
+    pub fn from_custom<E: core::any::Any + Send>(error: E) -> Run {
         Run::Custom(Box::new(error))
     }
 }
 
 impl PartialEq for Run {
-    fn eq(&self, other: &Self) -> bool {
+    fn eq(&self, other: &Run) -> bool {
         match (self, other) {
-            (Self::GetStorage(l_get_storage), Self::GetStorage(r_get_storage)) => {
+            (Run::GetStorage(l_get_storage), Run::GetStorage(r_get_storage)) => {
                 l_get_storage == r_get_storage
             }
             _ => false,
@@ -423,8 +445,8 @@ impl Error for Run {}
 impl Debug for Run {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), core::fmt::Error> {
         match self {
-            Self::GetStorage(get_storage) => Debug::fmt(&get_storage, f),
-            Self::Custom(err) => {
+            Run::GetStorage(get_storage) => Debug::fmt(&get_storage, f),
+            Run::Custom(err) => {
                 f.write_fmt(format_args!("run failed with a custom error, {:?}.", err))
             }
         }
@@ -475,6 +497,8 @@ pub enum InvalidSystem {
     MultipleViews,
     /// Multiple exclusive views for the same storage.
     MultipleViewsMut,
+    /// System returning `Workload`
+    WorkloadUsedAsSystem(&'static str),
 }
 
 #[cfg(feature = "std")]
@@ -483,9 +507,10 @@ impl Error for InvalidSystem {}
 impl Debug for InvalidSystem {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), core::fmt::Error> {
         match self {
-            Self::AllStorages => f.write_str("A system borrowing both AllStorages and a storage can't run. You can borrow the storage inside the system with AllStorages::borrow or AllStorages::run instead."),
-            Self::MultipleViews => f.write_str("Multiple views of the same storage including an exclusive borrow, consider removing the shared borrow."),
-            Self::MultipleViewsMut => f.write_str("Multiple exclusive views of the same storage, consider removing one."),
+            InvalidSystem::AllStorages => f.write_str("A system borrowing both AllStorages and a storage can't run. You can borrow the storage inside the system with AllStorages::borrow or AllStorages::run instead."),
+            InvalidSystem::MultipleViews => f.write_str("Multiple views of the same storage including an exclusive borrow, consider removing the shared borrow."),
+            InvalidSystem::MultipleViewsMut => f.write_str("Multiple exclusive views of the same storage, consider removing one."),
+            InvalidSystem::WorkloadUsedAsSystem(system_name) => f.write_fmt(format_args!("Workload used as a system, you should call it `{}()`.", system_name)),
         }
     }
 }
@@ -516,9 +541,9 @@ impl Error for UniqueRemove {}
 impl Debug for UniqueRemove {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), core::fmt::Error> {
         match self {
-            Self::AllStorages => f.write_str("Cannot borrow AllStorages while it's already exclusively borrowed."),
-            Self::MissingUnique(name) => f.write_fmt(format_args!("No unique storage exists for {}.\n", name)),
-            Self::StorageBorrow((name, borrow)) => match borrow {
+            UniqueRemove::AllStorages => f.write_str("Cannot borrow AllStorages while it's already exclusively borrowed."),
+            UniqueRemove::MissingUnique(name) => f.write_fmt(format_args!("No unique storage exists for {}.\n", name)),
+            UniqueRemove::StorageBorrow((name, borrow)) => match borrow {
                 Borrow::Unique => f.write_fmt(format_args!("Cannot mutably borrow {} storage while it's already borrowed.", name)),
                 Borrow::WrongThread => f.write_fmt(format_args!("Cannot borrow {} storage from other thread than the one it was created in because it's !Send and !Sync.", name)),
                 _ => unreachable!()
@@ -551,8 +576,8 @@ impl Error for Apply {}
 impl Debug for Apply {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), core::fmt::Error> {
         match self {
-            Self::IdenticalIds => f.write_str("Cannot use apply with identical components."),
-            Self::MissingComponent(id) => f.write_fmt(format_args!(
+            Apply::IdenticalIds => f.write_str("Cannot use apply with identical components."),
+            Apply::MissingComponent(id) => f.write_fmt(format_args!(
                 "Entity {:?} does not have any component in this storage.",
                 id
             )),
@@ -568,7 +593,7 @@ impl Display for Apply {
 
 /// Error returned by [`are_all_uniques_present_in_world`].
 ///
-/// [`are_all_uniques_present_in_world`]: crate::WorkloadBuilder::are_all_uniques_present_in_world()
+/// [`are_all_uniques_present_in_world`]: crate::Workload::are_all_uniques_present_in_world()
 #[derive(Clone, Eq)]
 pub enum UniquePresence {
     #[allow(missing_docs)]
@@ -583,10 +608,10 @@ pub enum UniquePresence {
 
 // For some reason this trait can't be derived with Box<dyn Label>
 impl PartialEq for UniquePresence {
-    fn eq(&self, other: &Self) -> bool {
+    fn eq(&self, other: &UniquePresence) -> bool {
         match (self, other) {
-            (Self::Workload(l0), Self::Workload(r0)) => l0 == r0,
-            (Self::Unique(l0), Self::Unique(r0)) => l0 == r0,
+            (UniquePresence::Workload(l0), UniquePresence::Workload(r0)) => l0 == r0,
+            (UniquePresence::Unique(l0), UniquePresence::Unique(r0)) => l0 == r0,
             _ => core::mem::discriminant(self) == core::mem::discriminant(other),
         }
     }
@@ -631,7 +656,7 @@ pub enum CustomStorageView {
 }
 
 impl From<GetStorage> for CustomStorageView {
-    fn from(get_storage: GetStorage) -> Self {
+    fn from(get_storage: GetStorage) -> CustomStorageView {
         CustomStorageView::GetStorage(get_storage)
     }
 }
@@ -652,6 +677,60 @@ impl Debug for CustomStorageView {
 }
 
 impl Display for CustomStorageView {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), core::fmt::Error> {
+        Debug::fmt(self, f)
+    }
+}
+
+/// Returned when requirements for a workload make it impossible to build a valid workload.
+#[derive(Clone, Eq)]
+pub enum ImpossibleRequirements {
+    #[allow(missing_docs)]
+    BeforeAndAfter(Box<dyn Label>, Box<dyn Label>),
+    #[allow(missing_docs)]
+    ImpossibleConstraints(Box<dyn Label>, Vec<Box<dyn Label>>, Vec<Box<dyn Label>>),
+}
+
+impl PartialEq for ImpossibleRequirements {
+    fn eq(&self, other: &ImpossibleRequirements) -> bool {
+        match (self, other) {
+            (
+                ImpossibleRequirements::BeforeAndAfter(system, conflict),
+                ImpossibleRequirements::BeforeAndAfter(other_system, other_conflict),
+            ) => system == other_system && conflict == other_conflict,
+            (
+                ImpossibleRequirements::ImpossibleConstraints(workload1, before1, after1),
+                ImpossibleRequirements::ImpossibleConstraints(workload2, before2, after2),
+            ) => workload1 == workload2 && before1 == before2 && after1 == after2,
+            _ => false,
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl Error for ImpossibleRequirements {}
+
+impl Debug for ImpossibleRequirements {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), core::fmt::Error> {
+        match self {
+            ImpossibleRequirements::BeforeAndAfter(system, other_system) => {
+                f.write_fmt(format_args!(
+                    "{:?} needs to be both before and after {:?}",
+                    system, other_system
+                ))
+            }
+            ImpossibleRequirements::ImpossibleConstraints(system, before, after) => {
+                f.write_fmt(format_args!("{:?} cannot be placed.", system))?;
+                f.write_str("\n")?;
+                f.write_fmt(format_args!("Before: {:?}", before))?;
+                f.write_str("\n")?;
+                f.write_fmt(format_args!("After: {:?}", after))
+            }
+        }
+    }
+}
+
+impl Display for ImpossibleRequirements {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), core::fmt::Error> {
         Debug::fmt(self, f)
     }

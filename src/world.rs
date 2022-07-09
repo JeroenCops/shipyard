@@ -15,6 +15,7 @@ use crate::sparse_set::{BulkAddEntity, TupleAddComponent, TupleDelete, TupleRemo
 use crate::storage::{Storage, StorageId};
 use alloc::borrow::Cow;
 use alloc::boxed::Box;
+use alloc::format;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::AtomicU32;
@@ -434,7 +435,7 @@ let (entities, mut usizes) = world
         V::Borrow: Borrow<'s, View = V>,
     {
         let current = self.get_current();
-        V::Borrow::borrow(self, None, current)
+        V::Borrow::borrow(self, None, None, current)
     }
     #[doc = "Borrows the requested storages and runs the function.  
 Data can be passed to the function, this always has to be a single type but you can use a tuple if needed.
@@ -758,7 +759,7 @@ let i = world.run(sys1);
     ///
     /// let world = World::new();
     ///
-    /// Workload::builder("foo").add_to_world(&world).unwrap();
+    /// Workload::new("foo").add_to_world(&world).unwrap();
     ///
     /// assert!(world.contains_workload("foo"));
     /// assert!(!world.contains_workload("bar"));
@@ -790,7 +791,9 @@ let i = world.run(sys1);
         }
 
         #[cfg(feature = "tracing")]
-        let parent_span = tracing::info_span!("run_workload", ?workload_name);
+        let parent_span = tracing::info_span!("workload", name = ?workload_name);
+        #[cfg(feature = "tracing")]
+        let _parent_span = parent_span.enter();
 
         #[cfg(feature = "parallel")]
         {
@@ -802,75 +805,68 @@ let i = world.run(sys1);
                         if let Some(index) = batch.0 {
                             scope.spawn(|_| {
                                 if batch.1.len() == 1 {
+                                    let system_name = system_names[batch.1[0]];
+
+                                    #[cfg(feature = "tracing")]
+                                    let system_span = tracing::info_span!(parent: parent_span.clone(), "system", name = %system_name);
+                                    #[cfg(feature = "tracing")]
+                                    let _system_span = system_span.enter();
+
                                     result = systems[batch.1[0]](self).map_err(|err| {
-                                        error::RunWorkload::Run((system_names[batch.1[0]], err))
+                                        error::RunWorkload::Run((system_name, err))
                                     });
                                 } else {
                                     use rayon::prelude::*;
 
                                     result = batch.1.par_iter().try_for_each(|&index| {
+                                        let system_name = system_names[index];
+
+                                        #[cfg(feature = "tracing")]
+                                        let system_span = tracing::info_span!(parent: parent_span.clone(), "system", name = %system_name);
+                                        #[cfg(feature = "tracing")]
+                                        let _system_span = system_span.enter();
+
                                         (systems[index])(self).map_err(|err| {
-                                            error::RunWorkload::Run((system_names[index], err))
+                                            error::RunWorkload::Run((system_name, err))
                                         })
                                     });
                                 }
                             });
 
+                            let system_name = system_names[index];
+
                             #[cfg(feature = "tracing")]
-                            {
-                                let system_name = system_names[index];
+                            let system_span = tracing::info_span!(parent: parent_span.clone(), "system", name = %system_name);
+                            #[cfg(feature = "tracing")]
+                            let _system_span = system_span.enter();
 
-                                tracing::info_span!(parent: parent_span.clone(), "run_system", %system_name).in_scope(|| {
-                                systems[index](self).map_err(|err| {
-                                    error::RunWorkload::Run((system_name, err))
-                                })
-                            })?;
-                            }
-
-                            #[cfg(not(feature = "tracing"))]
-                            {
-                                systems[index](self).map_err(|err| {
-                                    error::RunWorkload::Run((system_names[index], err))
-                                })?;
-                            }
+                            systems[index](self)
+                                .map_err(|err| error::RunWorkload::Run((system_name, err)))?;
                         } else if batch.1.len() == 1 {
+                            let system_name = system_names[batch.1[0]];
+
                             #[cfg(feature = "tracing")]
-                            {
-                                let system_name = system_names[batch.1[0]];
+                            let system_span = tracing::info_span!(parent: parent_span.clone(), "system", name = %system_name);
+                            #[cfg(feature = "tracing")]
+                            let _system_span = system_span.enter();
 
-                                result = tracing::info_span!(parent: parent_span.clone(), "run_system", %system_name).in_scope(|| {
-                                systems[batch.1[0]](self).map_err(|err| {
-                                error::RunWorkload::Run((system_names[batch.1[0]], err))
-                            })});
-                            }
-
-                            #[cfg(not(feature = "tracing"))]
-                            {
-                                result = systems[batch.1[0]](self).map_err(|err| {
-                                    error::RunWorkload::Run((system_names[batch.1[0]], err))
-                                });
-                            }
+                            result = systems[batch.1[0]](self)
+                                .map_err(|err| error::RunWorkload::Run((system_name, err)));
                         } else {
                             use rayon::prelude::*;
 
                             result = batch.1.par_iter().try_for_each(|&index| {
-                            #[cfg(feature = "tracing")]
-                            {
                                 let system_name = system_names[index];
 
-                                tracing::info_span!(parent: parent_span.clone(), "run_system", %system_name).in_scope(|| {
-                                    (systems[index])(self)
-                                        .map_err(|err| error::RunWorkload::Run((system_name, err)))
-                                })
-                            }
+                                #[cfg(feature = "tracing")]
+                                let system_span = tracing::info_span!(parent: parent_span.clone(), "system", name = %system_name);
+                                #[cfg(feature = "tracing")]
+                                    let _system_span = system_span.enter();
 
-                            #[cfg(not(feature = "tracing"))]
-                            {
                                 (systems[index])(self).map_err(|err| {
-                                    error::RunWorkload::Run((system_names[index], err))
+                                    error::RunWorkload::Run((system_name, err))
                                 })
-                            }
-                        });
+                            });
                         }
 
                         Ok(())
@@ -897,22 +893,15 @@ let i = world.run(sys1);
         #[cfg(not(feature = "parallel"))]
         {
             batches.sequential.iter().try_for_each(|&index| {
+                let system_name = system_names[index];
+
                 #[cfg(feature = "tracing")]
-                {
-                    let system_name = system_names[index];
+                let system_span =
+                    tracing::info_span!(parent: parent_span.clone(), "system", name = %system_name);
+                #[cfg(feature = "tracing")]
+                let _system_span = system_span.enter();
 
-                    tracing::info_span!(parent: parent_span.clone(), "run_system", %system_name)
-                        .in_scope(|| {
-                            (systems[index])(self)
-                                .map_err(|err| error::RunWorkload::Run((system_name, err)))
-                        })
-                }
-
-                #[cfg(not(feature = "tracing"))]
-                {
-                    (systems[index])(self)
-                        .map_err(|err| error::RunWorkload::Run((system_names[index], err)))
-                }
+                (systems[index])(self).map_err(|err| error::RunWorkload::Run((system_name, err)))
             })
         }
     }
@@ -1273,14 +1262,23 @@ impl World {
         WorldMemoryUsage(self)
     }
     /// Returns a list of workloads, their systems and which storages these systems borrow.
-    pub fn workloads_type_usage(&mut self) -> WorkloadsTypeUsage {
+    ///
+    /// ### Borrows
+    ///
+    /// - [`Scheduler`] (shared)
+    ///
+    /// ### Panics
+    ///
+    /// - [`Scheduler`] borrow failed.
+    #[track_caller]
+    pub fn workloads_type_usage(&self) -> WorkloadsTypeUsage {
         let mut workload_type_info = hashbrown::HashMap::new();
 
-        let scheduler = self.scheduler.get_mut();
+        let scheduler = self.scheduler.borrow().unwrap();
 
         for (workload_name, batches) in &scheduler.workloads {
             workload_type_info.insert(
-                workload_name.clone(),
+                format!("{workload_name:?}"),
                 batches
                     .sequential
                     .iter()
@@ -1290,7 +1288,7 @@ impl World {
 
                         scheduler.system_generators[*system_index](&mut system_storage_borrowed);
 
-                        (system_name, system_storage_borrowed)
+                        (system_name.into(), system_storage_borrowed)
                     })
                     .collect(),
             );
