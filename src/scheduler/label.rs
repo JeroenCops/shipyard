@@ -69,24 +69,6 @@ impl Label for Box<dyn Label> {
     }
 }
 
-impl Label for crate::Workload {
-    fn as_any(&self) -> &dyn Any {
-        &self.name
-    }
-    fn dyn_eq(&self, other: &dyn Label) -> bool {
-        self.name.dyn_eq(other)
-    }
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        self.name.dyn_hash(state)
-    }
-    fn dyn_clone(&self) -> Box<dyn Label> {
-        self.name.dyn_clone()
-    }
-    fn dyn_debug(&self, f: &mut Formatter<'_>) -> Result<(), core::fmt::Error> {
-        self.name.dyn_debug(f)
-    }
-}
-
 impl Clone for Box<dyn Label> {
     fn clone(&self) -> Self {
         // Box<dyn Label> implements Label, we have to deref to get the actual type
@@ -126,12 +108,108 @@ where
     W: IntoWorkloadSystem<Views, R> + 'static,
 {
     fn as_label(&self) -> Box<dyn Label> {
-        Box::new(TypeId::of::<W>())
+        self.label()
     }
 }
 
 impl<T: Label> AsLabel<T> for T {
     fn as_label(&self) -> Box<dyn Label> {
         T::dyn_clone(self)
+    }
+}
+
+#[derive(Clone, Debug, Hash)]
+pub(crate) struct SequentialLabel(pub(crate) Box<dyn Label>);
+
+impl Label for SequentialLabel {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    #[allow(clippy::op_ref)]
+    fn dyn_eq(&self, other: &dyn Label) -> bool {
+        if let Some(other) = other.as_any().downcast_ref::<SequentialLabel>() {
+            &self.0 == &other.0
+        } else {
+            false
+        }
+    }
+
+    fn dyn_hash(&self, mut state: &mut dyn Hasher) {
+        SequentialLabel::hash(self, &mut state)
+    }
+
+    fn dyn_clone(&self) -> Box<dyn Label> {
+        Box::new(SequentialLabel(self.0.clone()))
+    }
+
+    fn dyn_debug(&self, f: &mut Formatter<'_>) -> Result<(), core::fmt::Error> {
+        SequentialLabel::fmt(self, f)
+    }
+}
+
+#[derive(Clone, Debug, Hash)]
+pub(crate) struct SystemLabel {
+    pub(crate) type_id: TypeId,
+    pub(crate) name: Box<dyn Label>,
+}
+
+impl Label for SystemLabel {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    #[allow(clippy::op_ref)]
+    fn dyn_eq(&self, other: &dyn Label) -> bool {
+        if let Some(other) = other.as_any().downcast_ref::<SystemLabel>() {
+            self.type_id == other.type_id
+        } else {
+            false
+        }
+    }
+
+    fn dyn_hash(&self, mut state: &mut dyn Hasher) {
+        TypeId::hash(&self.type_id, &mut state)
+    }
+
+    fn dyn_clone(&self) -> Box<dyn Label> {
+        Box::new(self.clone())
+    }
+
+    fn dyn_debug(&self, f: &mut Formatter<'_>) -> Result<(), core::fmt::Error> {
+        f.write_fmt(format_args!("System({:?})", self.name))
+    }
+}
+
+#[derive(Clone, Debug, Hash)]
+pub(crate) struct WorkloadLabel {
+    pub(crate) type_id: TypeId,
+    pub(crate) name: Box<dyn Label>,
+}
+
+impl Label for WorkloadLabel {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    #[allow(clippy::op_ref)]
+    fn dyn_eq(&self, other: &dyn Label) -> bool {
+        if let Some(other) = other.as_any().downcast_ref::<WorkloadLabel>() {
+            self.type_id == other.type_id
+        } else {
+            false
+        }
+    }
+
+    fn dyn_hash(&self, mut state: &mut dyn Hasher) {
+        TypeId::hash(&self.type_id, &mut state)
+    }
+
+    fn dyn_clone(&self) -> Box<dyn Label> {
+        Box::new(self.clone())
+    }
+
+    fn dyn_debug(&self, f: &mut Formatter<'_>) -> Result<(), core::fmt::Error> {
+        f.write_fmt(format_args!("Workload({:?})", self.name))
     }
 }

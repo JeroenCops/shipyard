@@ -260,21 +260,31 @@ pub enum AddWorkload {
     AlreadyExists,
     /// The `Scheduler` is already borrowed.
     Borrow,
-    /// Unknown nested workload.
-    UnknownWorkload(Box<dyn Label>, Box<dyn Label>),
     /// This workload cannot be created.
     ImpossibleRequirements(ImpossibleRequirements),
+    /// A system declared some requirements that are not met.
+    MissingInWorkload(Box<dyn Label>, Vec<Box<dyn Label>>),
+    /// A system declared some requirements that are not met.
+    MissingBefore(Box<dyn Label>, Vec<Box<dyn Label>>),
+    /// A system declared some requirements that are not met.
+    MissingAfter(Box<dyn Label>, Vec<Box<dyn Label>>),
 }
 
 // For some reason this trait can't be derived with Box<dyn Label>
 impl PartialEq for AddWorkload {
     fn eq(&self, other: &AddWorkload) -> bool {
         match (self, other) {
-            (AddWorkload::UnknownWorkload(l0, l1), AddWorkload::UnknownWorkload(r0, r1)) => {
-                l0 == r0 && l1 == r1
-            }
             (AddWorkload::ImpossibleRequirements(l0), AddWorkload::ImpossibleRequirements(r0)) => {
                 l0 == r0
+            }
+            (AddWorkload::MissingInWorkload(l0, l1), AddWorkload::MissingInWorkload(r0, r1)) => {
+                l0 == r0 && l1 == r1
+            }
+            (AddWorkload::MissingBefore(l0, l1), AddWorkload::MissingBefore(r0, r1)) => {
+                l0 == r0 && l1 == r1
+            }
+            (AddWorkload::MissingAfter(l0, l1), AddWorkload::MissingAfter(r0, r1)) => {
+                l0 == r0 && l1 == r1
             }
             _ => core::mem::discriminant(self) == core::mem::discriminant(other),
         }
@@ -291,11 +301,21 @@ impl Debug for AddWorkload {
             AddWorkload::Borrow => {
                 f.write_str("Cannot mutably borrow the scheduler while it's already borrowed.")
             }
-            AddWorkload::UnknownWorkload(workload, unknown_workload) => f.write_fmt(format_args!(
-                "Could not find {:?} workload while building {:?}'s batches.",
-                unknown_workload, workload
-            )),
             AddWorkload::ImpossibleRequirements(err) => Debug::fmt(err, f),
+            AddWorkload::MissingInWorkload(system_name, missing_in_workload) => {
+                f.write_fmt(format_args!(
+                    "System({:?}) is missing some systems in workload: {:?}",
+                    system_name, missing_in_workload
+                ))
+            }
+            AddWorkload::MissingBefore(system_name, missing_before) => f.write_fmt(format_args!(
+                "System({:?}) is missing some systems before: {:?}",
+                system_name, missing_before
+            )),
+            AddWorkload::MissingAfter(system_name, missing_after) => f.write_fmt(format_args!(
+                "System({:?}) is missing some systems after: {:?}",
+                system_name, missing_after
+            )),
         }
     }
 }
@@ -346,7 +366,7 @@ pub enum RunWorkload {
     /// The `Scheduler` is exclusively borrowed.
     Scheduler,
     /// Error while running a system.
-    Run((&'static str, Run)),
+    Run((Box<dyn Label>, Run)),
     /// Workload is not present in the world.
     MissingWorkload,
 }
@@ -379,9 +399,9 @@ impl Debug for RunWorkload {
             RunWorkload::Scheduler => {
                 f.write_str("Cannot borrow the scheduler while it's already mutably borrowed.")
             }
-            RunWorkload::MissingWorkload => f.write_str("No workload with this name exists."),
+            RunWorkload::MissingWorkload => f.write_str("No workload with this name exists. You first need to add the workload using `World::add_workload`."),
             RunWorkload::Run((system_name, run)) => {
-                f.write_fmt(format_args!("System {} failed: {:?}", system_name, run))
+                f.write_fmt(format_args!("System {:?} failed: {:?}", system_name, run))
             }
         }
     }
@@ -715,12 +735,12 @@ impl Debug for ImpossibleRequirements {
         match self {
             ImpossibleRequirements::BeforeAndAfter(system, other_system) => {
                 f.write_fmt(format_args!(
-                    "{:?} needs to be both before and after {:?}",
+                    "System({:?}) needs to be both before and after {:?}",
                     system, other_system
                 ))
             }
             ImpossibleRequirements::ImpossibleConstraints(system, before, after) => {
-                f.write_fmt(format_args!("{:?} cannot be placed.", system))?;
+                f.write_fmt(format_args!("System({:?}) cannot be placed.", system))?;
                 f.write_str("\n")?;
                 f.write_fmt(format_args!("Before: {:?}", before))?;
                 f.write_str("\n")?;

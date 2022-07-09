@@ -33,7 +33,7 @@ pub struct BatchInfo {
 #[derive(Clone)]
 pub struct SystemInfo {
     #[allow(missing_docs)]
-    pub name: &'static str,
+    pub name: Box<dyn Label>,
     #[allow(missing_docs)]
     pub type_id: TypeId,
     #[allow(missing_docs)]
@@ -79,7 +79,7 @@ pub enum Conflict {
 #[derive(Clone, Eq)]
 pub struct SystemId {
     #[allow(missing_docs)]
-    pub name: &'static str,
+    pub name: Box<dyn Label>,
     #[allow(missing_docs)]
     pub type_id: TypeId,
 }
@@ -92,7 +92,7 @@ impl PartialEq for SystemId {
 
 impl core::fmt::Debug for SystemId {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str(self.name)
+        f.write_fmt(format_args!("{:?}", self.name))
     }
 }
 
@@ -161,20 +161,23 @@ impl core::hash::Hash for TypeInfo {
 #[allow(clippy::type_complexity)]
 #[derive(Debug)]
 #[cfg_attr(feature = "serde1", derive(serde::Serialize, serde::Deserialize))]
-pub struct WorkloadsTypeUsage(
-    pub hashbrown::HashMap<String, Vec<(Cow<'static, str>, Vec<TypeInfo>)>>,
-);
+pub struct WorkloadsTypeUsage(pub hashbrown::HashMap<String, Vec<(String, Vec<TypeInfo>)>>);
 
 /// List of before/after requirements for a system or workload.
 /// The list dedups items.
-#[derive(Clone, Debug)]
-pub struct Requirements(Vec<Box<dyn Label>>);
+#[derive(Clone, Debug, Default)]
+pub struct DedupedLabels(Vec<Box<dyn Label>>);
 
-impl Requirements {
-    pub(crate) fn new() -> Requirements {
-        Requirements(Vec::new())
+impl DedupedLabels {
+    pub(crate) fn new() -> DedupedLabels {
+        DedupedLabels(Vec::new())
     }
 
+    pub(crate) fn with_capacity(capacity: usize) -> DedupedLabels {
+        DedupedLabels(Vec::with_capacity(capacity))
+    }
+
+    /// Returns `true` if the `Label` was not already present.
     pub(crate) fn add<T>(&mut self, label: impl AsLabel<T>) -> bool {
         let label = label.as_label();
 
@@ -199,9 +202,21 @@ impl Requirements {
     pub(crate) fn len(&self) -> usize {
         self.0.len()
     }
+
+    pub(crate) fn clear(&mut self) {
+        self.0.clear();
+    }
+
+    pub(crate) fn to_vec(&self) -> Vec<Box<dyn Label>> {
+        self.0.clone()
+    }
+
+    pub(crate) fn retain<F: FnMut(&Box<dyn Label>) -> bool>(&mut self, f: F) {
+        self.0.retain(f);
+    }
 }
 
-impl<'a> IntoIterator for &'a Requirements {
+impl<'a> IntoIterator for &'a DedupedLabels {
     type Item = &'a Box<dyn Label>;
 
     type IntoIter = RequirementsIter<'a>;
@@ -222,7 +237,7 @@ impl<'a> Iterator for RequirementsIter<'a> {
     }
 }
 
-impl Extend<Box<dyn Label>> for Requirements {
+impl Extend<Box<dyn Label>> for DedupedLabels {
     fn extend<T: IntoIterator<Item = Box<dyn Label>>>(&mut self, iter: T) {
         for label in iter {
             self.add(label);
@@ -230,7 +245,7 @@ impl Extend<Box<dyn Label>> for Requirements {
     }
 }
 
-impl<'a> Extend<&'a Box<dyn Label>> for Requirements {
+impl<'a> Extend<&'a Box<dyn Label>> for DedupedLabels {
     fn extend<T: IntoIterator<Item = &'a Box<dyn Label>>>(&mut self, iter: T) {
         for label in iter {
             self.add(label.clone());
