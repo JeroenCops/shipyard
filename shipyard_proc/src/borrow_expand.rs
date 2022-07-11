@@ -109,7 +109,7 @@ pub(crate) fn expand_borrow(
                         )
                     } else {
                         quote!(
-                            #field_name: <#field_type as ::shipyard::IntoBorrow>::Borrow::borrow(world, last_run, current)?
+                            #field_name: <#field_type as ::shipyard::IntoBorrow>::Borrow::borrow(world, system_id, last_run, current)?
                         )
                     }
                 });
