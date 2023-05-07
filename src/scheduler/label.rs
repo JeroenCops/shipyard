@@ -103,9 +103,10 @@ pub trait AsLabel<T> {
     fn as_label(&self) -> Box<dyn Label>;
 }
 
-impl<Views, R, W> AsLabel<(Views, R)> for W
+impl<Views, R, Sys> AsLabel<(Views, R)> for Sys
 where
-    W: IntoWorkloadSystem<Views, R> + 'static,
+    Sys: IntoWorkloadSystem<Views, R> + 'static,
+    R: 'static,
 {
     fn as_label(&self) -> Box<dyn Label> {
         self.label()

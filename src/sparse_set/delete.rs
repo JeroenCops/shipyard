@@ -12,36 +12,27 @@ pub trait TupleDelete {
     fn delete(all_storages: &mut AllStorages, entity: EntityId) -> bool;
 }
 
-impl<T: Send + Sync + Component> TupleDelete for (T,)
-where
-    T::Tracking: Send + Sync,
-{
+impl<T: Send + Sync + Component> TupleDelete for T {
     #[inline]
     fn delete(all_storages: &mut AllStorages, entity: EntityId) -> bool {
         let current = all_storages.get_current();
 
         all_storages
-            .exclusive_storage_or_insert_mut(
-                StorageId::of::<SparseSet<T, T::Tracking>>(),
-                SparseSet::<T>::new,
-            )
-            .delete(entity, current)
+            .exclusive_storage_or_insert_mut(StorageId::of::<SparseSet<T>>(), SparseSet::<T>::new)
+            .dyn_delete(entity, current)
     }
 }
 
 macro_rules! impl_delete_component {
     ($(($type: ident, $index: tt))+) => {
-        impl<$($type: Send + Sync + Component,)+> TupleDelete for ($($type,)+)
-        where
-            $($type::Tracking: Send + Sync),+
-        {
+        impl<$($type: Send + Sync + Component,)+> TupleDelete for ($($type,)+) {
             fn delete(all_storages: &mut AllStorages, entity: EntityId) -> bool {
                 let current = all_storages.get_current();
 
                 $(
                     all_storages
-                        .exclusive_storage_or_insert_mut(StorageId::of::<SparseSet<$type, $type::Tracking>>(), SparseSet::<$type>::new)
-                        .delete(entity, current)
+                        .exclusive_storage_or_insert_mut(StorageId::of::<SparseSet<$type>>(), SparseSet::<$type>::new)
+                        .dyn_delete(entity, current)
                 )||+
             }
         }
@@ -58,4 +49,4 @@ macro_rules! delete_component {
     }
 }
 
-delete_component![(A, 0) (B, 1); (C, 2) (D, 3) (E, 4) (F, 5) (G, 6) (H, 7) (I, 8) (J, 9)];
+delete_component![(A, 0); (B, 1) (C, 2) (D, 3) (E, 4) (F, 5) (G, 6) (H, 7) (I, 8) (J, 9)];

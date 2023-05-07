@@ -76,7 +76,7 @@ impl eframe::App for MyApp {
                 .show(ctx, |ui| {
                     if ui.style().visuals.dark_mode {
                         ui.style_mut().visuals.override_text_color =
-                            Some(egui::color::Color32::from_gray(255));
+                            Some(egui::Color32::from_gray(255));
                     }
 
                     ui.vertical(|ui| {
@@ -90,13 +90,15 @@ impl eframe::App for MyApp {
                         });
 
                         if ui.button("Or check out the example.").clicked() {
-                            ctx.input_mut().raw.dropped_files.push(egui::DroppedFile {
-                                path: Some("square_eater_workloads.json".into()),
-                                name: "square_eater_workloads.json".to_string(),
-                                last_modified: None,
-                                bytes: Some(
-                                    include_bytes!("square_eater_workloads.json")[..].into(),
-                                ),
+                            ctx.input_mut(|input_state| {
+                                input_state.raw.dropped_files.push(egui::DroppedFile {
+                                    path: Some("square_eater_workloads.json".into()),
+                                    name: "square_eater_workloads.json".to_string(),
+                                    last_modified: None,
+                                    bytes: Some(
+                                        include_bytes!("square_eater_workloads.json")[..].into(),
+                                    ),
+                                });
                             })
                         }
 
@@ -109,8 +111,7 @@ impl eframe::App for MyApp {
 
         egui::CentralPanel::default().show(ctx, |ui| {
             if ui.style().visuals.dark_mode {
-                ui.style_mut().visuals.override_text_color =
-                    Some(egui::color::Color32::from_gray(255));
+                ui.style_mut().visuals.override_text_color = Some(egui::Color32::from_gray(255));
             }
 
             ui.vertical_centered(|ui| {
@@ -258,7 +259,7 @@ impl eframe::App for MyApp {
                                 let mut system_button = egui::Button::new(system);
                                 if let Some(color) = system_color {
                                     let mut stroke = systems.visuals().widgets.inactive.fg_stroke;
-                                    stroke.color = egui::color::Color32::BLACK;
+                                    stroke.color = egui::Color32::BLACK;
                                     system_button = system_button.fill(color).stroke(stroke);
                                 }
 
@@ -343,8 +344,8 @@ impl eframe::App for MyApp {
         });
 
         // Collect dropped files:
-        if !ctx.input().raw.dropped_files.is_empty() {
-            let dropped_files = &ctx.input().raw.dropped_files;
+        ctx.input(|input_state| {
+            let dropped_files = &input_state.raw.dropped_files;
 
             if let Some(dropped_file) = dropped_files.get(0) {
                 let mut bytes: Cow<'_, [u8]> = Cow::Borrowed(&[]);
@@ -365,22 +366,22 @@ impl eframe::App for MyApp {
                     self.selected_workload = None;
                 }
             }
-        }
+        })
     }
 }
 
-fn shared_color(ui: &mut egui::Ui) -> egui::color::Color32 {
+fn shared_color(ui: &mut egui::Ui) -> egui::Color32 {
     if ui.visuals().dark_mode {
-        egui::color::Color32::DARK_BLUE
+        egui::Color32::DARK_BLUE
     } else {
-        egui::color::Color32::LIGHT_BLUE
+        egui::Color32::LIGHT_BLUE
     }
 }
 
-fn exclusive_color(ui: &mut egui::Ui) -> egui::color::Color32 {
+fn exclusive_color(ui: &mut egui::Ui) -> egui::Color32 {
     if ui.visuals().dark_mode {
-        egui::color::Color32::DARK_RED
+        egui::Color32::DARK_RED
     } else {
-        egui::color::Color32::LIGHT_RED
+        egui::Color32::LIGHT_RED
     }
 }

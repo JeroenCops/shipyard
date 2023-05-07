@@ -6,18 +6,23 @@ pub use custom_storage::CustomStorageAccess;
 pub use delete_any::{CustomDeleteAny, TupleDeleteAny};
 pub use retain::TupleRetain;
 
-use crate::atomic_refcell::{AtomicRefCell, Ref, RefMut};
-use crate::borrow::{AllStoragesBorrow, Borrow, IntoBorrow};
+use crate::atomic_refcell::{ARef, ARefMut, AtomicRefCell};
+use crate::borrow::Borrow;
 use crate::type_id::TypeId;
 use crate::component::{Unique, Local};
 use crate::entities::Entities;
 use crate::entity_id::EntityId;
+use crate::get_component::GetComponent;
+use crate::iter_component::{IntoIterRef, IterComponent};
 use crate::memory_usage::AllStoragesMemoryUsage;
 use crate::public_transport::RwLock;
 use crate::public_transport::ShipyardRwLock;
 use crate::reserve::BulkEntityIter;
 use crate::sparse_set::{BulkAddEntity, TupleAddComponent, TupleDelete, TupleRemove};
 use crate::storage::{SBox, Storage, StorageId};
+use crate::system::AllSystem;
+use crate::tracking::{TrackingTimestamp, TupleTrack};
+use crate::views::EntitiesViewMut;
 use crate::{error, UniqueStorage, LocalStorage};
 use alloc::boxed::Box;
 use alloc::sync::Arc;
@@ -73,7 +78,6 @@ impl AllStorages {
     }
     /// Adds a new unique storage, unique storages store exactly one `T` at any time.  
     /// To access a unique storage value, use [`UniqueView`] or [`UniqueViewMut`].  
-    /// Does nothing if the storage already exists.
     ///
     /// ### Example
     ///
@@ -94,12 +98,13 @@ impl AllStorages {
     pub fn add_unique<T: Send + Sync + Unique>(&self, component: T) {
         let storage_id = StorageId::of::<UniqueStorage<T>>();
 
-        self.storages.write().entry(storage_id).or_insert_with(|| {
-            SBox::new(UniqueStorage::new(
+        self.storages
+            .write()
+            .entry(storage_id)
+            .insert(SBox::new(UniqueStorage::new(
                 component,
                 self.get_tracking_timestamp().0,
-            ))
-        });
+            )));
     }
     /// Adds a new unique storage, unique storages store exactly one `T` at any time.  
     /// To access a unique storage value, use [NonSend] and [UniqueViewMut] or [UniqueViewMut].  
@@ -290,6 +295,7 @@ impl AllStorages {
     ///
     /// all_storages.strip(entity);
     /// ```
+    #[track_caller]
     pub fn strip(&mut self, entity: EntityId) {
         let current = self.get_current();
 
@@ -325,6 +331,7 @@ impl AllStorages {
     /// Deletes all components of an entity except the ones passed in `S`.  
     /// This is identical to `retain` but uses `StorageId` and not generics.  
     /// You should only use this method if you use a custom storage with a runtime id.
+    #[track_caller]
     pub fn retain_storage(&mut self, entity: EntityId, excluded_storage: &[StorageId]) {
         let current = self.get_current();
 
@@ -346,6 +353,7 @@ impl AllStorages {
     ///
     /// all_storages.clear();
     /// ```
+    #[track_caller]
     pub fn clear(&mut self) {
         let current = self.get_current();
 
@@ -354,22 +362,24 @@ impl AllStorages {
         }
     }
     /// Clear all deletion and removal tracking data.
-    pub fn clear_all_removed_or_deleted(&mut self) {
+    #[track_caller]
+    pub fn clear_all_removed_and_deleted(&mut self) {
         for storage in self.storages.get_mut().values_mut() {
             unsafe { &mut *storage.0 }
                 .get_mut()
-                .clear_all_removed_or_deleted();
+                .clear_all_removed_and_deleted();
         }
     }
     /// Clear all deletion and removal tracking data older than some timestamp.
-    pub fn clear_all_removed_or_deleted_older_than_timestamp(
+    #[track_caller]
+    pub fn clear_all_removed_and_deleted_older_than_timestamp(
         &mut self,
-        timestamp: crate::TrackingTimestamp,
+        timestamp: TrackingTimestamp,
     ) {
         for storage in self.storages.get_mut().values_mut() {
             unsafe { &mut *storage.0 }
                 .get_mut()
-                .clear_all_removed_or_deleted_older_than_timestamp(timestamp);
+                .clear_all_removed_and_deleted_older_than_timestamp(timestamp);
         }
     }
     /// Creates a new entity with the components passed as argument and returns its `EntityId`.  
@@ -394,8 +404,10 @@ impl AllStorages {
     /// ```
     #[inline]
     pub fn add_entity<T: TupleAddComponent>(&mut self, component: T) -> EntityId {
+        let current = self.get_current();
+
         let entity = self.exclusive_storage_mut::<Entities>().unwrap().generate();
-        component.add_component(self, entity);
+        component.add_component(self, entity, current);
 
         entity
     }
@@ -454,12 +466,14 @@ impl AllStorages {
     #[track_caller]
     #[inline]
     pub fn add_component<T: TupleAddComponent>(&mut self, entity: EntityId, component: T) {
+        let current = self.get_current();
+
         if self
             .exclusive_storage_mut::<Entities>()
             .unwrap()
             .is_alive(entity)
         {
-            component.add_component(self, entity);
+            component.add_component(self, entity, current);
         } else {
             panic!("{:?}", error::AddComponent::EntityIsNotAlive);
         }
@@ -616,14 +630,12 @@ let (entities, mut usizes) = all_storages
     #[cfg_attr(feature = "thread_local", doc = "[NonSend]: crate::NonSend")]
     #[cfg_attr(feature = "thread_local", doc = "[NonSync]: crate::NonSync")]
     #[cfg_attr(feature = "thread_local", doc = "[NonSendSync]: crate::NonSendSync")]
-    pub fn borrow<'s, V: IntoBorrow>(&'s self) -> Result<V, error::GetStorage>
-    where
-        V::Borrow: Borrow<'s, View = V> + AllStoragesBorrow<'s>,
-    {
+    pub fn borrow<V: Borrow>(&self) -> Result<V::View<'_>, error::GetStorage> {
         let current = self.get_current();
-        V::Borrow::all_borrow(self, None, current)
+
+        V::borrow(self, None, None, None, current)
     }
-    #[doc = "Borrows the requested storages and runs the function.  
+    #[doc = "Borrows the requested storages, runs the function and evaluates to the function's return value.  
 Data can be passed to the function, this always has to be a single type but you can use a tuple if needed.
 
 You can use:
@@ -707,17 +719,22 @@ You can use:
     #[cfg_attr(feature = "thread_local", doc = "[NonSync]: crate::NonSync")]
     #[cfg_attr(feature = "thread_local", doc = "[NonSendSync]: crate::NonSendSync")]
     #[track_caller]
-    pub fn run_with_data<'s, Data, B, R, S: crate::system::AllSystem<'s, (Data,), B, R>>(
-        &'s self,
+    pub fn run_with_data<Data, B, R, S: AllSystem<(Data,), B, R>>(
+        &self,
         system: S,
         data: Data,
     ) -> R {
+        #[cfg(feature = "tracing")]
+        let system_span = tracing::info_span!("system", name = ?type_name::<S>());
+        #[cfg(feature = "tracing")]
+        let _system_span = system_span.enter();
+
         system
             .run((data,), self)
             .map_err(error::Run::GetStorage)
             .unwrap()
     }
-    #[doc = "Borrows the requested storages and runs the function.
+    #[doc = "Borrows the requested storages, runs the function and evaluates to the function's return value.
 
 You can use:
 * [View]\\<T\\> for a shared access to `T` storage
@@ -827,7 +844,12 @@ let i = all_storages.run(sys1);
     #[cfg_attr(feature = "thread_local", doc = "[NonSync]: crate::NonSync")]
     #[cfg_attr(feature = "thread_local", doc = "[NonSendSync]: crate::NonSendSync")]
     #[track_caller]
-    pub fn run<'s, B, R, S: crate::system::AllSystem<'s, (), B, R>>(&'s self, system: S) -> R {
+    pub fn run<B, R, S: AllSystem<(), B, R>>(&self, system: S) -> R {
+        #[cfg(feature = "tracing")]
+        let system_span = tracing::info_span!("system", name = ?type_name::<S>());
+        #[cfg(feature = "tracing")]
+        let _system_span = system_span.enter();
+
         system
             .run((), self)
             .map_err(error::Run::GetStorage)
@@ -866,7 +888,7 @@ let i = all_storages.run(sys1);
     pub fn delete_any<T: TupleDeleteAny>(&mut self) {
         T::delete_any(self);
     }
-    pub(crate) fn entities(&self) -> Result<Ref<'_, &'_ Entities>, error::GetStorage> {
+    pub(crate) fn entities(&self) -> Result<ARef<'_, &'_ Entities>, error::GetStorage> {
         let storage_id = StorageId::of::<Entities>();
 
         let storages = self.storages.read();
@@ -874,13 +896,13 @@ let i = all_storages.run(sys1);
         let storage = unsafe { &*storage.0 }.borrow();
         drop(storages);
         match storage {
-            Ok(storage) => Ok(Ref::map(storage, |storage| {
+            Ok(storage) => Ok(ARef::map(storage, |storage| {
                 storage.as_any().downcast_ref().unwrap()
             })),
             Err(err) => Err(error::GetStorage::Entities(err)),
         }
     }
-    pub(crate) fn entities_mut(&self) -> Result<RefMut<'_, &'_ mut Entities>, error::GetStorage> {
+    pub(crate) fn entities_mut(&self) -> Result<ARefMut<'_, &'_ mut Entities>, error::GetStorage> {
         let storage_id = StorageId::of::<Entities>();
 
         let storages = self.storages.read();
@@ -888,7 +910,7 @@ let i = all_storages.run(sys1);
         let storage = unsafe { &*storage.0 }.borrow_mut();
         drop(storages);
         match storage {
-            Ok(storage) => Ok(RefMut::map(storage, |storage| {
+            Ok(storage) => Ok(ARefMut::map(storage, |storage| {
                 storage.as_any_mut().downcast_mut().unwrap()
             })),
             Err(err) => Err(error::GetStorage::Entities(err)),
@@ -899,6 +921,7 @@ let i = all_storages.run(sys1);
     ) -> Result<&mut T, error::GetStorage> {
         self.exclusive_storage_mut_by_id(StorageId::of::<T>())
     }
+    #[track_caller]
     pub(crate) fn exclusive_storage_mut_by_id<T: 'static>(
         &mut self,
         storage_id: StorageId,
@@ -939,6 +962,77 @@ let i = all_storages.run(sys1);
         .downcast_mut()
         .unwrap()
     }
+    #[cfg(feature = "thread_local")]
+    #[track_caller]
+    pub(crate) fn exclusive_storage_or_insert_non_send_mut<T, F>(
+        &mut self,
+        storage_id: StorageId,
+        f: F,
+    ) -> &mut T
+    where
+        T: 'static + Storage + Sync,
+        F: FnOnce() -> T,
+    {
+        let storages = self.storages.get_mut();
+
+        unsafe {
+            &mut *storages
+                .entry(storage_id)
+                .or_insert_with(|| SBox::new_non_send(f(), std::thread::current().id()))
+                .0
+        }
+        .get_mut()
+        .as_any_mut()
+        .downcast_mut()
+        .unwrap()
+    }
+    #[cfg(feature = "thread_local")]
+    pub(crate) fn exclusive_storage_or_insert_non_sync_mut<T, F>(
+        &mut self,
+        storage_id: StorageId,
+        f: F,
+    ) -> &mut T
+    where
+        T: 'static + Storage + Send,
+        F: FnOnce() -> T,
+    {
+        let storages = self.storages.get_mut();
+
+        unsafe {
+            &mut *storages
+                .entry(storage_id)
+                .or_insert_with(|| SBox::new_non_sync(f()))
+                .0
+        }
+        .get_mut()
+        .as_any_mut()
+        .downcast_mut()
+        .unwrap()
+    }
+    #[cfg(feature = "thread_local")]
+    #[track_caller]
+    pub(crate) fn exclusive_storage_or_insert_non_send_sync_mut<T, F>(
+        &mut self,
+        storage_id: StorageId,
+        f: F,
+    ) -> &mut T
+    where
+        T: 'static + Storage,
+        F: FnOnce() -> T,
+    {
+        let storages = self.storages.get_mut();
+
+        unsafe {
+            &mut *storages
+                .entry(storage_id)
+                .or_insert_with(|| SBox::new_non_send_sync(f(), std::thread::current().id()))
+                .0
+        }
+        .get_mut()
+        .as_any_mut()
+        .downcast_mut()
+        .unwrap()
+    }
     /// Make the given entity alive.  
     /// Does nothing if an entity with a greater generation is already at this index.  
     /// Returns `true` if the entity is successfully spawned.
@@ -960,8 +1054,333 @@ let i = all_storages.run(sys1);
     }
 
     /// Returns a timestamp used to clear tracking information.
-    pub fn get_tracking_timestamp(&self) -> crate::TrackingTimestamp {
-        crate::TrackingTimestamp(self.counter.load(core::sync::atomic::Ordering::Acquire))
+    pub fn get_tracking_timestamp(&self) -> TrackingTimestamp {
+        TrackingTimestamp(self.counter.load(core::sync::atomic::Ordering::Acquire))
+    }
+
+    /// Enable insertion tracking for the given components.
+    pub fn track_insertion<T: TupleTrack>(&mut self) -> &mut AllStorages {
+        T::track_insertion(self);
+        self
+    }
+
+    /// Enable modification tracking for the given components.
+    pub fn track_modification<T: TupleTrack>(&mut self) -> &mut AllStorages {
+        T::track_modification(self);
+        self
+    }
+
+    /// Enable deletion tracking for the given components.
+    pub fn track_deletion<T: TupleTrack>(&mut self) -> &mut AllStorages {
+        T::track_deletion(self);
+        self
+    }
+
+    /// Enable removal tracking for the given components.
+    pub fn track_removal<T: TupleTrack>(&mut self) -> &mut AllStorages {
+        T::track_removal(self);
+        self
+    }
+
+    /// Enable insertion, deletion and removal tracking for the given components.
+    pub fn track_all<T: TupleTrack>(&mut self) {
+        T::track_all(self);
+    }
+
+    #[doc = "Retrieve components of `entity`.
+
+Multiple components can be queried at the same time using a tuple.
+
+You can use:
+* `&T` for a shared access to `T` component
+* `&mut T` for an exclusive access to `T` component"]
+    #[cfg_attr(
+        all(feature = "thread_local", docsrs),
+        doc = "* <span style=\"display: table;color: #2f2f2f;background-color: #C4ECFF;border-width: 1px;border-style: solid;border-color: #7BA5DB;padding: 3px;margin-bottom: 5px; font-size: 90%\">This is supported on <strong><code style=\"background-color: #C4ECFF\">feature=\"thread_local\"</code></strong> only:</span>"
+    )]
+    #[cfg_attr(
+        all(feature = "thread_local"),
+        doc = "* [NonSend]<&T> for a shared access to a `T` component where `T` isn't `Send`
+* [NonSend]<&mut T> for an exclusive access to a `T` component where `T` isn't `Send`
+* [NonSync]<&T> for a shared access to a `T` component where `T` isn't `Sync`
+* [NonSync]<&mut T> for an exclusive access to a `T` component where `T` isn't `Sync`
+* [NonSendSync]<&T> for a shared access to a `T` component where `T` isn't `Send` nor `Sync`
+* [NonSendSync]<&mut T> for an exclusive access to a `T` component where `T` isn't `Send` nor `Sync`"
+    )]
+    #[cfg_attr(
+        not(feature = "thread_local"),
+        doc = "* NonSend: must activate the *thread_local* feature
+* NonSync: must activate the *thread_local* feature
+* NonSendSync: must activate the *thread_local* feature"
+    )]
+    #[doc = "
+### Borrows
+
+- [AllStorages] (shared) + storage (exclusive or shared)
+
+### Errors
+
+- [AllStorages] borrow failed.
+- Storage borrow failed.
+- Entity does not have the component.
+
+### Example
+```
+use shipyard::{AllStoragesViewMut, Component, World};
+
+#[derive(Component, Debug, PartialEq, Eq)]
+struct U32(u32);
+
+#[derive(Component, Debug, PartialEq, Eq)]
+struct USIZE(usize);
+
+let world = World::new();
+let mut all_storages = world.borrow::<AllStoragesViewMut>().unwrap();
+
+let entity = all_storages.add_entity((USIZE(0), U32(1)));
+
+let (i, j) = all_storages.get::<(&USIZE, &mut U32)>(entity).unwrap();
+
+assert!(*i == &USIZE(0));
+assert!(*j == &U32(1));
+```"]
+    #[cfg_attr(
+        feature = "thread_local",
+        doc = "[NonSend]: crate::NonSend
+[NonSync]: crate::NonSync
+[NonSendSync]: crate::NonSendSync"
+    )]
+    #[inline]
+    pub fn get<T: GetComponent>(
+        &self,
+        entity: EntityId,
+    ) -> Result<T::Out<'_>, error::GetComponent> {
+        let current = self.get_current();
+
+        T::get(self, None, current, entity)
+    }
+
+    #[doc = "Iterate components.
+
+Multiple components can be iterated at the same time using a tuple.
+
+You can use:
+* `&T` for a shared access to `T` component
+* `&mut T` for an exclusive access to `T` component"]
+    #[cfg_attr(
+        all(feature = "thread_local", docsrs),
+        doc = "* <span style=\"display: table;color: #2f2f2f;background-color: #C4ECFF;border-width: 1px;border-style: solid;border-color: #7BA5DB;padding: 3px;margin-bottom: 5px; font-size: 90%\">This is supported on <strong><code style=\"background-color: #C4ECFF\">feature=\"thread_local\"</code></strong> only:</span>"
+    )]
+    #[cfg_attr(
+        all(feature = "thread_local"),
+        doc = "* [NonSend]<&T> for a shared access to a `T` component where `T` isn't `Send`
+* [NonSend]<&mut T> for an exclusive access to a `T` component where `T` isn't `Send`
+* [NonSync]<&T> for a shared access to a `T` component where `T` isn't `Sync`
+* [NonSync]<&mut T> for an exclusive access to a `T` component where `T` isn't `Sync`
+* [NonSendSync]<&T> for a shared access to a `T` component where `T` isn't `Send` nor `Sync`
+* [NonSendSync]<&mut T> for an exclusive access to a `T` component where `T` isn't `Send` nor `Sync`"
+    )]
+    #[cfg_attr(
+        not(feature = "thread_local"),
+        doc = "* NonSend: must activate the *thread_local* feature
+* NonSync: must activate the *thread_local* feature
+* NonSendSync: must activate the *thread_local* feature"
+    )]
+    #[doc = "
+### Borrows
+
+- [AllStorages] (shared)
+
+### Panics
+
+- [AllStorages] borrow failed.
+
+### Example
+```
+use shipyard::{AllStoragesViewMut, Component, World};
+
+#[derive(Component, Debug, PartialEq, Eq)]
+struct U32(u32);
+
+#[derive(Component, Debug, PartialEq, Eq)]
+struct USIZE(usize);
+
+let world = World::new();
+let mut all_storages = world.borrow::<AllStoragesViewMut>().unwrap();
+
+let entity = all_storages.add_entity((USIZE(0), U32(1)));
+
+let mut iter = all_storages.iter::<(&USIZE, &mut U32)>();
+
+for (i, j) in &mut iter {
+    // <-- SNIP -->
+}
+```"]
+    #[cfg_attr(
+        feature = "thread_local",
+        doc = "[NonSend]: crate::NonSend
+[NonSync]: crate::NonSync
+[NonSendSync]: crate::NonSendSync"
+    )]
+    #[inline]
+    #[track_caller]
+    pub fn iter<T: IterComponent>(&self) -> IntoIterRef<'_, T> {
+        let current = self.get_current();
+
+        IntoIterRef {
+            all_storages: self,
+            all_borrow: None,
+            current,
+            phantom: core::marker::PhantomData,
+        }
+    }
+
+    /// Sets the on entity deletion callback.
+    ///
+    /// ### Borrows
+    ///
+    /// - Entities (exclusive)
+    ///
+    /// ### Panics
+    ///
+    /// - Entities borrow failed.
+    #[track_caller]
+    pub fn on_deletion(&self, f: impl FnMut(EntityId) + Send + Sync + 'static) {
+        let mut entities = self.borrow::<EntitiesViewMut<'_>>().unwrap();
+
+        entities.on_deletion(f);
+    }
+
+    /// Returns true if entity matches a living entity.
+    pub fn is_entity_alive(&mut self, entity: EntityId) -> bool {
+        self.exclusive_storage_mut::<Entities>()
+            .unwrap()
+            .is_alive(entity)
+    }
+
+    /// Moves an entity from a `World` to another.
+    ///
+    /// ```
+    /// use shipyard::{AllStoragesViewMut, Component, World};
+    ///
+    /// #[derive(Component, Debug, PartialEq, Eq)]
+    /// struct USIZE(usize);
+    ///
+    /// let world1 = World::new();
+    /// let world2 = World::new();
+    ///
+    /// let mut all_storages1 = world1.borrow::<AllStoragesViewMut>().unwrap();
+    /// let mut all_storages2 = world2.borrow::<AllStoragesViewMut>().unwrap();
+    ///
+    /// let entity = all_storages1.add_entity(USIZE(1));
+    ///
+    /// all_storages1.move_entity(&mut all_storages2, entity);
+    ///
+    /// assert!(!all_storages1.is_entity_alive(entity));
+    /// assert_eq!(all_storages2.get::<&USIZE>(entity).as_deref(), Ok(&&USIZE(1)));
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// - `entity` is not alive
+    #[track_caller]
+    pub fn move_entity(&mut self, other: &mut AllStorages, entity: EntityId) {
+        let current = self.get_current();
+        let other_current = other.get_current();
+
+        if !self
+            .exclusive_storage_mut::<Entities>()
+            .unwrap()
+            .delete_unchecked(entity)
+        {
+            panic!(
+                "Entity {:?} has to be alive to move it to another World.",
+                entity
+            );
+        };
+
+        assert!(
+            other
+                .exclusive_storage_mut::<Entities>()
+                .unwrap()
+                .spawn(entity),
+            "Other World already has an entity at {:?}'s index.",
+            entity
+        );
+
+        for storage in self.storages.get_mut().values_mut() {
+            unsafe { &mut *storage.0 }.get_mut().move_component_from(
+                other,
+                entity,
+                entity,
+                current,
+                other_current,
+            );
+        }
+    }
+
+    /// Moves all components from an entity to another in another `World`.
+    ///
+    /// ```
+    /// use shipyard::{AllStoragesViewMut, Component, World};
+    ///
+    /// #[derive(Component, Debug, PartialEq, Eq)]
+    /// struct USIZE(usize);
+    ///
+    /// let world1 = World::new();
+    /// let world2 = World::new();
+    ///
+    /// let mut all_storages1 = world1.borrow::<AllStoragesViewMut>().unwrap();
+    /// let mut all_storages2 = world2.borrow::<AllStoragesViewMut>().unwrap();
+    ///
+    /// let from = all_storages1.add_entity(USIZE(1));
+    /// let to = all_storages2.add_entity(());
+    ///
+    /// all_storages1.move_components(&mut all_storages2, from, to);
+    ///
+    /// assert!(all_storages1.get::<&USIZE>(from).is_err());
+    /// assert_eq!(all_storages2.get::<&USIZE>(to).as_deref(), Ok(&&USIZE(1)));
+    /// ```
+    /// # Panics
+    ///
+    /// - `from` is not alive
+    /// - `to` is not alive
+    #[track_caller]
+    pub fn move_components(&mut self, other: &mut AllStorages, from: EntityId, to: EntityId) {
+        let current = self.get_current();
+        let other_current = other.get_current();
+
+        if !self
+            .exclusive_storage_mut::<Entities>()
+            .unwrap()
+            .is_alive(from)
+        {
+            panic!(
+                "Entity {:?} has to be alive to move its components to another World.",
+                from
+            );
+        };
+
+        if !other
+            .exclusive_storage_mut::<Entities>()
+            .unwrap()
+            .is_alive(to)
+        {
+            panic!(
+                "Entity {:?} has to be alive to receive components from another World.",
+                to
+            );
+        };
+
+        for storage in self.storages.get_mut().values_mut() {
+            unsafe { &mut *storage.0 }.get_mut().move_component_from(
+                other,
+                from,
+                to,
+                current,
+                other_current,
+            );
+        }
     }
 }
 

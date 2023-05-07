@@ -2,13 +2,8 @@ use shipyard::*;
 
 #[derive(Default)]
 struct USIZE(usize);
-
-impl Component for USIZE {
-    type Tracking = track::Untracked;
-}
-impl Local for USIZE {
-    type Tracking = track::Untracked;
-}
+impl Component for USIZE {}
+impl Local for USIZE {}
 
 #[test]
 fn init_local_storage() {
@@ -25,6 +20,8 @@ fn init_local_storage() {
         .unwrap();
 
     let err = world.run_workload("Test");
+
+    println!("Error {:?}", err.as_ref().err());
 
     assert_eq!(err.is_err(), false);
 }
@@ -85,14 +82,8 @@ fn default_local_storage() {
     struct Value {
         v: usize,
     }
-
-    impl Component for Value {
-        type Tracking = track::Untracked;
-    }
-
-    impl Local for Value {
-        type Tracking = track::Untracked;
-    }
+    impl Component for Value {}
+    impl Local for Value {}
 
     impl Default for Value {
         fn default() -> Self {

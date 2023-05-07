@@ -1,5 +1,5 @@
 use crate::all_storages::AllStorages;
-use crate::atomic_refcell::{Ref, RefMut};
+use crate::atomic_refcell::{ARef, ARefMut};
 use crate::error;
 use crate::storage::{SBox, Storage, StorageId};
 use crate::type_id::TypeId;
@@ -9,211 +9,162 @@ use core::any::type_name;
 ///
 /// Useful with custom storage or to define custom views.
 pub trait CustomStorageAccess {
-    /// Returns a [`Ref`] to the requested `S` storage.
-    ///
-    /// [`Ref`]: crate::atomic_refcell::Ref
-    fn custom_storage<S: 'static>(&self) -> Result<Ref<'_, &'_ S>, error::GetStorage>;
-    /// Returns a [`Ref`] to the requested `S` storage using a [`StorageId`].
-    ///
-    /// [`Ref`]: crate::atomic_refcell::Ref
-    /// [`StorageId`]: crate::storage::StorageId
+    /// Returns a [`ARef`] to the requested `S` storage.
+    fn custom_storage<S: 'static>(&self) -> Result<ARef<'_, &'_ S>, error::GetStorage>;
+    /// Returns a [`ARef`] to the requested `S` storage using a [`StorageId`].
     fn custom_storage_by_id(
         &self,
         storage_id: StorageId,
-    ) -> Result<Ref<'_, &'_ dyn Storage>, error::GetStorage>;
-    /// Returns a [`RefMut`] to the requested `S` storage.
-    fn custom_storage_mut<S: 'static>(&self, system_id: Option<TypeId>) -> Result<RefMut<'_, &'_ mut S>, error::GetStorage>;
-    /// Returns a [`RefMut`] to the requested `S` storage using a [`StorageId`].
-    ///
-    /// [`RefMut`]: crate::atomic_refcell::RefMut
-    /// [`StorageId`]: crate::storage::StorageId
+    ) -> Result<ARef<'_, &'_ dyn Storage>, error::GetStorage>;
+    /// Returns a [`ARefMut`] to the requested `S` storage.
+    fn custom_storage_mut<S: 'static>(&self, system_id: Option<TypeId>) -> Result<ARefMut<'_, &'_ mut S>, error::GetStorage>;
+    /// Returns a [`ARefMut`] to the requested `S` storage using a [`StorageId`].
     fn custom_storage_mut_by_id(
         &self,
         storage_id: StorageId,
-    ) -> Result<RefMut<'_, &'_ mut (dyn Storage + 'static)>, error::GetStorage>;
-    /// Returns a [`Ref`] to the requested `S` storage and create it if it does not exist.
-    ///
-    /// [`Ref`]: crate::atomic_refcell::Ref
-    fn custom_storage_or_insert<S, F>(&self, f: F) -> Result<Ref<'_, &'_ S>, error::GetStorage>
+    ) -> Result<ARefMut<'_, &'_ mut (dyn Storage + 'static)>, error::GetStorage>;
+    /// Returns a [`ARef`] to the requested `S` storage and create it if it does not exist.
+    fn custom_storage_or_insert<S, F>(&self, f: F) -> Result<ARef<'_, &'_ S>, error::GetStorage>
     where
         S: 'static + Storage + Send + Sync,
         F: FnOnce() -> S;
-        
-    /// Returns a [`Ref`] to the requested `S` storage using a [`StorageId`] and create it if it does not exist.
-    ///
-    /// [`Ref`]: crate::atomic_refcell::Ref
-    /// [`StorageId`]: crate::storage::StorageId
+    /// Returns a [`ARef`] to the requested `S` storage using a [`StorageId`] and create it if it does not exist.
     fn custom_storage_or_insert_by_id<S, F>(
         &self,
         storage_id: StorageId,
         f: F,
-    ) -> Result<Ref<'_, &'_ S>, error::GetStorage>
+    ) -> Result<ARef<'_, &'_ S>, error::GetStorage>
     where
         S: 'static + Storage + Send + Sync,
         F: FnOnce() -> S;
-    /// Returns a [`Ref`] to the requested `S` storage and create it if it does not exist.
-    ///
-    /// [`Ref`]: crate::atomic_refcell::Ref
+    /// Returns a [`ARef`] to the requested `S` storage and create it if it does not exist.
     #[cfg(feature = "thread_local")]
     fn custom_storage_or_insert_non_send<S, F>(
         &self,
         f: F,
-    ) -> Result<Ref<'_, &'_ S>, error::GetStorage>
+    ) -> Result<ARef<'_, &'_ S>, error::GetStorage>
     where
         S: 'static + Storage + Sync,
         F: FnOnce() -> S;
-    /// Returns a [`Ref`] to the requested `S` storage using a [`StorageId`] and create it if it does not exist.
-    ///
-    /// [`Ref`]: crate::atomic_refcell::Ref
-    /// [`StorageId`]: crate::storage::StorageId
+    /// Returns a [`ARef`] to the requested `S` storage using a [`StorageId`] and create it if it does not exist.
     #[cfg(feature = "thread_local")]
     fn custom_storage_or_insert_non_send_by_id<S, F>(
         &self,
         storage_id: StorageId,
         f: F,
-    ) -> Result<Ref<'_, &'_ S>, error::GetStorage>
+    ) -> Result<ARef<'_, &'_ S>, error::GetStorage>
     where
         S: 'static + Storage + Sync,
         F: FnOnce() -> S;
-    /// Returns a [`Ref`] to the requested `S` storage and create it if it does not exist.
-    ///
-    /// [`Ref`]: crate::atomic_refcell::Ref
+    /// Returns a [`ARef`] to the requested `S` storage and create it if it does not exist.
     #[cfg(feature = "thread_local")]
     fn custom_storage_or_insert_non_sync<S, F>(
         &self,
         f: F,
-    ) -> Result<Ref<'_, &'_ S>, error::GetStorage>
+    ) -> Result<ARef<'_, &'_ S>, error::GetStorage>
     where
         S: 'static + Storage + Send,
         F: FnOnce() -> S;
-    /// Returns a [`Ref`] to the requested `S` storage using a [`StorageId`] and create it if it does not exist.
-    ///
-    /// [`Ref`]: crate::atomic_refcell::Ref
-    /// [`StorageId`]: crate::storage::StorageId
+    /// Returns a [`ARef`] to the requested `S` storage using a [`StorageId`] and create it if it does not exist.
     #[cfg(feature = "thread_local")]
     fn custom_storage_or_insert_non_sync_by_id<S, F>(
         &self,
         storage_id: StorageId,
         f: F,
-    ) -> Result<Ref<'_, &'_ S>, error::GetStorage>
+    ) -> Result<ARef<'_, &'_ S>, error::GetStorage>
     where
         S: 'static + Storage + Send,
         F: FnOnce() -> S;
-    /// Returns a [`Ref`] to the requested `S` storage and create it if it does not exist.
-    ///
-    /// [`Ref`]: crate::atomic_refcell::Ref
+    /// Returns a [`ARef`] to the requested `S` storage and create it if it does not exist.
     #[cfg(feature = "thread_local")]
     fn custom_storage_or_insert_non_send_sync<S, F>(
         &self,
         f: F,
-    ) -> Result<Ref<'_, &'_ S>, error::GetStorage>
+    ) -> Result<ARef<'_, &'_ S>, error::GetStorage>
     where
         S: 'static + Storage,
         F: FnOnce() -> S;
-    /// Returns a [`Ref`] to the requested `S` storage using a [`StorageId`] and create it if it does not exist.
-    ///
-    /// [`Ref`]: crate::atomic_refcell::Ref
-    /// [`StorageId`]: crate::storage::StorageId
+    /// Returns a [`ARef`] to the requested `S` storage using a [`StorageId`] and create it if it does not exist.
     #[cfg(feature = "thread_local")]
     fn custom_storage_or_insert_non_send_sync_by_id<S, F>(
         &self,
         storage_id: StorageId,
         f: F,
-    ) -> Result<Ref<'_, &'_ S>, error::GetStorage>
+    ) -> Result<ARef<'_, &'_ S>, error::GetStorage>
     where
         S: 'static + Storage,
         F: FnOnce() -> S;
-    /// Returns a [`RefMut`] to the requested `S` storage and create it if it does not exist.
-    ///
-    /// [`RefMut`]: crate::atomic_refcell::RefMut
+    /// Returns a [`ARefMut`] to the requested `S` storage and create it if it does not exist.
     fn custom_storage_or_insert_mut<S, F>(
         &self,
         f: F,
-    ) -> Result<RefMut<'_, &'_ mut S>, error::GetStorage>
+    ) -> Result<ARefMut<'_, &'_ mut S>, error::GetStorage>
     where
         S: 'static + Storage + Send + Sync,
         F: FnOnce() -> S;
-    /// Returns a [`RefMut`] to the requested `S` storage using a [`StorageId`] and create it if it does not exist.
-    ///
-    /// [`RefMut`]: crate::atomic_refcell::RefMut
-    /// [`StorageId`]: crate::storage::StorageId
+    /// Returns a [`ARefMut`] to the requested `S` storage using a [`StorageId`] and create it if it does not exist.
     fn custom_storage_or_insert_mut_by_id<S, F>(
         &self,
         storage_id: StorageId,
         f: F,
-    ) -> Result<RefMut<'_, &'_ mut S>, error::GetStorage>
+    ) -> Result<ARefMut<'_, &'_ mut S>, error::GetStorage>
     where
         S: 'static + Storage + Send + Sync,
         F: FnOnce() -> S;
-    /// Returns a [`RefMut`] to the requested `S` storage and create it if it does not exist.
-    ///
-    /// [`RefMut`]: crate::atomic_refcell::RefMut
+    /// Returns a [`ARefMut`] to the requested `S` storage and create it if it does not exist.
     #[cfg(feature = "thread_local")]
-    fn custom_storage_or_insert_non_send_mut<'a, S, F>(
-        &'a self,
+    fn custom_storage_or_insert_non_send_mut<S, F>(
+        &self,
         f: F,
-    ) -> Result<RefMut<'a, &'a mut S>, error::GetStorage>
+    ) -> Result<ARefMut<'_, &'_ mut S>, error::GetStorage>
     where
         S: 'static + Storage + Sync,
         F: FnOnce() -> S;
-    /// Returns a [`RefMut`] to the requested `S` storage using a [`StorageId`] and create it if it does not exist.
-    ///
-    /// [`RefMut`]: crate::atomic_refcell::RefMut
-    /// [`StorageId`]: crate::storage::StorageId
+    /// Returns a [`ARefMut`] to the requested `S` storage using a [`StorageId`] and create it if it does not exist.
     #[cfg(feature = "thread_local")]
-    fn custom_storage_or_insert_non_send_mut_by_id<'a, S, F>(
-        &'a self,
+    fn custom_storage_or_insert_non_send_mut_by_id<S, F>(
+        &self,
         storage_id: StorageId,
         f: F,
-    ) -> Result<RefMut<'a, &'a mut S>, error::GetStorage>
+    ) -> Result<ARefMut<'_, &'_ mut S>, error::GetStorage>
     where
         S: 'static + Storage + Sync,
         F: FnOnce() -> S;
-    /// Returns a [`RefMut`] to the requested `S` storage and create it if it does not exist.
-    ///
-    /// [`RefMut`]: crate::atomic_refcell::RefMut
+    /// Returns a [`ARefMut`] to the requested `S` storage and create it if it does not exist.
     #[cfg(feature = "thread_local")]
-    fn custom_storage_or_insert_non_sync_mut<'a, S, F>(
-        &'a self,
+    fn custom_storage_or_insert_non_sync_mut<S, F>(
+        &self,
         f: F,
-    ) -> Result<RefMut<'a, &'a mut S>, error::GetStorage>
+    ) -> Result<ARefMut<'_, &'_ mut S>, error::GetStorage>
     where
         S: 'static + Storage + Send,
         F: FnOnce() -> S;
-    /// Returns a [`RefMut`] to the requested `S` storage using a [`StorageId`] and create it if it does not exist.
-    ///
-    /// [`RefMut`]: crate::atomic_refcell::RefMut
-    /// [`StorageId`]: crate::storage::StorageId
+    /// Returns a [`ARefMut`] to the requested `S` storage using a [`StorageId`] and create it if it does not exist.
     #[cfg(feature = "thread_local")]
-    fn custom_storage_or_insert_non_sync_mut_by_id<'a, S, F>(
-        &'a self,
+    fn custom_storage_or_insert_non_sync_mut_by_id<S, F>(
+        &self,
         storage_id: StorageId,
         f: F,
-    ) -> Result<RefMut<'a, &'a mut S>, error::GetStorage>
+    ) -> Result<ARefMut<'_, &'_ mut S>, error::GetStorage>
     where
         S: 'static + Storage + Send,
         F: FnOnce() -> S;
-    /// Returns a [`RefMut`] to the requested `S` storage and create it if it does not exist.
-    ///
-    /// [`RefMut`]: crate::atomic_refcell::RefMut
+    /// Returns a [`ARefMut`] to the requested `S` storage and create it if it does not exist.
     #[cfg(feature = "thread_local")]
-    fn custom_storage_or_insert_non_send_sync_mut<'a, S, F>(
-        &'a self,
+    fn custom_storage_or_insert_non_send_sync_mut<S, F>(
+        &self,
         f: F,
-    ) -> Result<RefMut<'a, &'a mut S>, error::GetStorage>
+    ) -> Result<ARefMut<'_, &'_ mut S>, error::GetStorage>
     where
         S: 'static + Storage,
         F: FnOnce() -> S;
-    /// Returns a [`RefMut`] to the requested `S` storage using a [`StorageId`] and create it if it does not exist.
-    ///
-    /// [`RefMut`]: crate::atomic_refcell::RefMut
-    /// [`StorageId`]: crate::storage::StorageId
+    /// Returns a [`ARefMut`] to the requested `S` storage using a [`StorageId`] and create it if it does not exist.
     #[cfg(feature = "thread_local")]
-    fn custom_storage_or_insert_non_send_sync_mut_by_id<'a, S, F>(
-        &'a self,
+    fn custom_storage_or_insert_non_send_sync_mut_by_id<S, F>(
+        &self,
         storage_id: StorageId,
         f: F,
-    ) -> Result<RefMut<'a, &'a mut S>, error::GetStorage>
+    ) -> Result<ARefMut<'_, &'_ mut S>, error::GetStorage>
     where
         S: 'static + Storage,
         F: FnOnce() -> S;
@@ -221,14 +172,14 @@ pub trait CustomStorageAccess {
 
 impl CustomStorageAccess for AllStorages {
     #[inline]
-    fn custom_storage<S: 'static>(&self) -> Result<Ref<'_, &'_ S>, error::GetStorage> {
+    fn custom_storage<S: 'static>(&self) -> Result<ARef<'_, &'_ S>, error::GetStorage> {
         let storages = self.storages.read();
         let storage = storages.get(&StorageId::of::<S>());
         if let Some(storage) = storage {
             let storage = unsafe { &*storage.0 }.borrow();
             drop(storages);
             match storage {
-                Ok(storage) => Ok(Ref::map(storage, |storage| {
+                Ok(storage) => Ok(ARef::map(storage, |storage| {
                     storage.as_any().downcast_ref().unwrap()
                 })),
                 Err(err) => Err(error::GetStorage::StorageBorrow {
@@ -247,7 +198,7 @@ impl CustomStorageAccess for AllStorages {
     fn custom_storage_by_id(
         &self,
         storage_id: StorageId,
-    ) -> Result<Ref<'_, &'_ dyn Storage>, error::GetStorage> {
+    ) -> Result<ARef<'_, &'_ dyn Storage>, error::GetStorage> {
         let storages = self.storages.read();
         let storage = storages.get(&storage_id);
         if let Some(storage) = storage {
@@ -266,7 +217,7 @@ impl CustomStorageAccess for AllStorages {
         }
     }
     #[inline]
-    fn custom_storage_mut<S: 'static>(&self, system_id: Option<TypeId>) -> Result<RefMut<'_, &'_ mut S>, error::GetStorage> {
+    fn custom_storage_mut<S: 'static>(&self, system_id: Option<TypeId>) -> Result<ARefMut<'_, &'_ mut S>, error::GetStorage> {
         let storages = self.storages.read();
         let mut storage_id = StorageId::of::<S>();
 
@@ -279,7 +230,7 @@ impl CustomStorageAccess for AllStorages {
             let storage = unsafe { &*storage.0 }.borrow_mut();
             drop(storages);
             match storage {
-                Ok(storage) => Ok(RefMut::map(storage, |storage| {
+                Ok(storage) => Ok(ARefMut::map(storage, |storage| {
                     storage.as_any_mut().downcast_mut().unwrap()
                 })),
                 Err(err) => Err(error::GetStorage::StorageBorrow {
@@ -298,7 +249,7 @@ impl CustomStorageAccess for AllStorages {
     fn custom_storage_mut_by_id(
         &self,
         storage_id: StorageId,
-    ) -> Result<RefMut<'_, &'_ mut (dyn Storage + 'static)>, error::GetStorage> {
+    ) -> Result<ARefMut<'_, &'_ mut (dyn Storage + 'static)>, error::GetStorage> {
         let storages = self.storages.read();
         let storage = storages.get(&storage_id);
         if let Some(storage) = storage {
@@ -317,7 +268,7 @@ impl CustomStorageAccess for AllStorages {
         }
     }
     #[inline]
-    fn custom_storage_or_insert<S, F>(&self, f: F) -> Result<Ref<'_, &'_ S>, error::GetStorage>
+    fn custom_storage_or_insert<S, F>(&self, f: F) -> Result<ARef<'_, &'_ S>, error::GetStorage>
     where
         S: 'static + Storage + Send + Sync,
         F: FnOnce() -> S,
@@ -328,7 +279,7 @@ impl CustomStorageAccess for AllStorages {
         &self,
         storage_id: StorageId,
         f: F,
-    ) -> Result<Ref<'_, &'_ S>, error::GetStorage>
+    ) -> Result<ARef<'_, &'_ S>, error::GetStorage>
     where
         S: 'static + Storage + Send + Sync,
         F: FnOnce() -> S,
@@ -339,7 +290,7 @@ impl CustomStorageAccess for AllStorages {
             let storage = unsafe { &*storage.0 }.borrow();
             drop(storages);
             match storage {
-                Ok(storage) => Ok(Ref::map(storage, |storage| {
+                Ok(storage) => Ok(ARef::map(storage, |storage| {
                     storage.as_any().downcast_ref().unwrap()
                 })),
                 Err(err) => Err(error::GetStorage::StorageBorrow {
@@ -365,7 +316,7 @@ impl CustomStorageAccess for AllStorages {
                 borrow: err,
             });
 
-            Ok(Ref::map(storage?, |storage| {
+            Ok(ARef::map(storage?, |storage| {
                 storage.as_any().downcast_ref::<S>().unwrap()
             }))
         }
@@ -375,7 +326,7 @@ impl CustomStorageAccess for AllStorages {
     fn custom_storage_or_insert_non_send<S, F>(
         &self,
         f: F,
-    ) -> Result<Ref<'_, &'_ S>, error::GetStorage>
+    ) -> Result<ARef<'_, &'_ S>, error::GetStorage>
     where
         S: 'static + Storage + Sync,
         F: FnOnce() -> S,
@@ -387,7 +338,7 @@ impl CustomStorageAccess for AllStorages {
         &self,
         storage_id: StorageId,
         f: F,
-    ) -> Result<Ref<'_, &'_ S>, error::GetStorage>
+    ) -> Result<ARef<'_, &'_ S>, error::GetStorage>
     where
         S: 'static + Storage + Sync,
         F: FnOnce() -> S,
@@ -398,7 +349,7 @@ impl CustomStorageAccess for AllStorages {
             let storage = unsafe { &*storage.0 }.borrow();
 
             match storage {
-                Ok(storage) => Ok(Ref::map(storage, |storage| {
+                Ok(storage) => Ok(ARef::map(storage, |storage| {
                     storage.as_any().downcast_ref().unwrap()
                 })),
                 Err(err) => Err(error::GetStorage::StorageBorrow {
@@ -432,7 +383,7 @@ impl CustomStorageAccess for AllStorages {
                 borrow: err,
             });
 
-            Ok(Ref::map(storage?, |storage| {
+            Ok(ARef::map(storage?, |storage| {
                 storage.as_any().downcast_ref::<S>().unwrap()
             }))
         }
@@ -442,7 +393,7 @@ impl CustomStorageAccess for AllStorages {
     fn custom_storage_or_insert_non_sync<S, F>(
         &self,
         f: F,
-    ) -> Result<Ref<'_, &'_ S>, error::GetStorage>
+    ) -> Result<ARef<'_, &'_ S>, error::GetStorage>
     where
         S: 'static + Storage + Send,
         F: FnOnce() -> S,
@@ -454,7 +405,7 @@ impl CustomStorageAccess for AllStorages {
         &self,
         storage_id: StorageId,
         f: F,
-    ) -> Result<Ref<'_, &'_ S>, error::GetStorage>
+    ) -> Result<ARef<'_, &'_ S>, error::GetStorage>
     where
         S: 'static + Storage + Send,
         F: FnOnce() -> S,
@@ -465,7 +416,7 @@ impl CustomStorageAccess for AllStorages {
             let storage = unsafe { &*storage.0 }.borrow();
 
             match storage {
-                Ok(storage) => Ok(Ref::map(storage, |storage| {
+                Ok(storage) => Ok(ARef::map(storage, |storage| {
                     storage.as_any().downcast_ref().unwrap()
                 })),
                 Err(err) => Err(error::GetStorage::StorageBorrow {
@@ -491,7 +442,7 @@ impl CustomStorageAccess for AllStorages {
                 borrow: err,
             });
 
-            Ok(Ref::map(storage?, |storage| {
+            Ok(ARef::map(storage?, |storage| {
                 storage.as_any().downcast_ref::<S>().unwrap()
             }))
         }
@@ -501,7 +452,7 @@ impl CustomStorageAccess for AllStorages {
     fn custom_storage_or_insert_non_send_sync<S, F>(
         &self,
         f: F,
-    ) -> Result<Ref<'_, &'_ S>, error::GetStorage>
+    ) -> Result<ARef<'_, &'_ S>, error::GetStorage>
     where
         S: 'static + Storage,
         F: FnOnce() -> S,
@@ -513,7 +464,7 @@ impl CustomStorageAccess for AllStorages {
         &self,
         storage_id: StorageId,
         f: F,
-    ) -> Result<Ref<'_, &'_ S>, error::GetStorage>
+    ) -> Result<ARef<'_, &'_ S>, error::GetStorage>
     where
         S: 'static + Storage,
         F: FnOnce() -> S,
@@ -524,7 +475,7 @@ impl CustomStorageAccess for AllStorages {
             let storage = unsafe { &*storage.0 }.borrow();
 
             match storage {
-                Ok(storage) => Ok(Ref::map(storage, |storage| {
+                Ok(storage) => Ok(ARef::map(storage, |storage| {
                     storage.as_any().downcast_ref().unwrap()
                 })),
                 Err(err) => Err(error::GetStorage::StorageBorrow {
@@ -558,7 +509,7 @@ impl CustomStorageAccess for AllStorages {
                 borrow: err,
             });
 
-            Ok(Ref::map(storage?, |storage| {
+            Ok(ARef::map(storage?, |storage| {
                 storage.as_any().downcast_ref::<S>().unwrap()
             }))
         }
@@ -567,7 +518,7 @@ impl CustomStorageAccess for AllStorages {
     fn custom_storage_or_insert_mut<S, F>(
         &self,
         f: F,
-    ) -> Result<RefMut<'_, &'_ mut S>, error::GetStorage>
+    ) -> Result<ARefMut<'_, &'_ mut S>, error::GetStorage>
     where
         S: 'static + Storage + Send + Sync,
         F: FnOnce() -> S,
@@ -578,7 +529,7 @@ impl CustomStorageAccess for AllStorages {
         &self,
         storage_id: StorageId,
         f: F,
-    ) -> Result<RefMut<'_, &'_ mut S>, error::GetStorage>
+    ) -> Result<ARefMut<'_, &'_ mut S>, error::GetStorage>
     where
         S: 'static + Storage + Send + Sync,
         F: FnOnce() -> S,
@@ -589,7 +540,7 @@ impl CustomStorageAccess for AllStorages {
             let storage = unsafe { &*storage.0 }.borrow_mut();
             drop(storages);
             match storage {
-                Ok(storage) => Ok(RefMut::map(storage, |storage| {
+                Ok(storage) => Ok(ARefMut::map(storage, |storage| {
                     storage.as_any_mut().downcast_mut().unwrap()
                 })),
                 Err(err) => Err(error::GetStorage::StorageBorrow {
@@ -615,17 +566,17 @@ impl CustomStorageAccess for AllStorages {
                 borrow: err,
             });
 
-            Ok(RefMut::map(storage?, |storage| {
+            Ok(ARefMut::map(storage?, |storage| {
                 storage.as_any_mut().downcast_mut::<S>().unwrap()
             }))
         }
     }
     #[cfg(feature = "thread_local")]
     #[inline]
-    fn custom_storage_or_insert_non_send_mut<'a, S, F>(
-        &'a self,
+    fn custom_storage_or_insert_non_send_mut<S, F>(
+        &self,
         f: F,
-    ) -> Result<RefMut<'a, &'a mut S>, error::GetStorage>
+    ) -> Result<ARefMut<'_, &'_ mut S>, error::GetStorage>
     where
         S: 'static + Storage + Sync,
         F: FnOnce() -> S,
@@ -633,11 +584,11 @@ impl CustomStorageAccess for AllStorages {
         self.custom_storage_or_insert_non_send_mut_by_id(StorageId::of::<S>(), f)
     }
     #[cfg(feature = "thread_local")]
-    fn custom_storage_or_insert_non_send_mut_by_id<'a, S, F>(
-        &'a self,
+    fn custom_storage_or_insert_non_send_mut_by_id<S, F>(
+        &self,
         storage_id: StorageId,
         f: F,
-    ) -> Result<RefMut<'a, &'a mut S>, error::GetStorage>
+    ) -> Result<ARefMut<'_, &'_ mut S>, error::GetStorage>
     where
         S: 'static + Storage + Sync,
         F: FnOnce() -> S,
@@ -648,7 +599,7 @@ impl CustomStorageAccess for AllStorages {
             let storage = unsafe { &*storage.0 }.borrow_mut();
 
             match storage {
-                Ok(storage) => Ok(RefMut::map(storage, |storage| {
+                Ok(storage) => Ok(ARefMut::map(storage, |storage| {
                     storage.as_any_mut().downcast_mut().unwrap()
                 })),
                 Err(err) => Err(error::GetStorage::StorageBorrow {
@@ -682,17 +633,17 @@ impl CustomStorageAccess for AllStorages {
                 borrow: err,
             });
 
-            Ok(RefMut::map(storage?, |storage| {
+            Ok(ARefMut::map(storage?, |storage| {
                 storage.as_any_mut().downcast_mut::<S>().unwrap()
             }))
         }
     }
     #[cfg(feature = "thread_local")]
     #[inline]
-    fn custom_storage_or_insert_non_sync_mut<'a, S, F>(
-        &'a self,
+    fn custom_storage_or_insert_non_sync_mut<S, F>(
+        &self,
         f: F,
-    ) -> Result<RefMut<'a, &'a mut S>, error::GetStorage>
+    ) -> Result<ARefMut<'_, &'_ mut S>, error::GetStorage>
     where
         S: 'static + Storage + Send,
         F: FnOnce() -> S,
@@ -700,11 +651,11 @@ impl CustomStorageAccess for AllStorages {
         self.custom_storage_or_insert_non_sync_mut_by_id(StorageId::of::<S>(), f)
     }
     #[cfg(feature = "thread_local")]
-    fn custom_storage_or_insert_non_sync_mut_by_id<'a, S, F>(
-        &'a self,
+    fn custom_storage_or_insert_non_sync_mut_by_id<S, F>(
+        &self,
         storage_id: StorageId,
         f: F,
-    ) -> Result<RefMut<'a, &'a mut S>, error::GetStorage>
+    ) -> Result<ARefMut<'_, &'_ mut S>, error::GetStorage>
     where
         S: 'static + Storage + Send,
         F: FnOnce() -> S,
@@ -715,7 +666,7 @@ impl CustomStorageAccess for AllStorages {
             let storage = unsafe { &*storage.0 }.borrow_mut();
 
             match storage {
-                Ok(storage) => Ok(RefMut::map(storage, |storage| {
+                Ok(storage) => Ok(ARefMut::map(storage, |storage| {
                     storage.as_any_mut().downcast_mut().unwrap()
                 })),
                 Err(err) => Err(error::GetStorage::StorageBorrow {
@@ -741,17 +692,17 @@ impl CustomStorageAccess for AllStorages {
                 borrow: err,
             });
 
-            Ok(RefMut::map(storage?, |storage| {
+            Ok(ARefMut::map(storage?, |storage| {
                 storage.as_any_mut().downcast_mut::<S>().unwrap()
             }))
         }
     }
     #[cfg(feature = "thread_local")]
     #[inline]
-    fn custom_storage_or_insert_non_send_sync_mut<'a, S, F>(
-        &'a self,
+    fn custom_storage_or_insert_non_send_sync_mut<S, F>(
+        &self,
         f: F,
-    ) -> Result<RefMut<'a, &'a mut S>, error::GetStorage>
+    ) -> Result<ARefMut<'_, &'_ mut S>, error::GetStorage>
     where
         S: 'static + Storage,
         F: FnOnce() -> S,
@@ -759,11 +710,11 @@ impl CustomStorageAccess for AllStorages {
         self.custom_storage_or_insert_non_send_sync_mut_by_id(StorageId::of::<S>(), f)
     }
     #[cfg(feature = "thread_local")]
-    fn custom_storage_or_insert_non_send_sync_mut_by_id<'a, S, F>(
-        &'a self,
+    fn custom_storage_or_insert_non_send_sync_mut_by_id<S, F>(
+        &self,
         storage_id: StorageId,
         f: F,
-    ) -> Result<RefMut<'a, &'a mut S>, error::GetStorage>
+    ) -> Result<ARefMut<'_, &'_ mut S>, error::GetStorage>
     where
         S: 'static + Storage,
         F: FnOnce() -> S,
@@ -774,7 +725,7 @@ impl CustomStorageAccess for AllStorages {
             let storage = unsafe { &*storage.0 }.borrow_mut();
 
             match storage {
-                Ok(storage) => Ok(RefMut::map(storage, |storage| {
+                Ok(storage) => Ok(ARefMut::map(storage, |storage| {
                     storage.as_any_mut().downcast_mut().unwrap()
                 })),
                 Err(err) => Err(error::GetStorage::StorageBorrow {
@@ -808,7 +759,7 @@ impl CustomStorageAccess for AllStorages {
                 borrow: err,
             });
 
-            Ok(RefMut::map(storage?, |storage| {
+            Ok(ARefMut::map(storage?, |storage| {
                 storage.as_any_mut().downcast_mut::<S>().unwrap()
             }))
         }

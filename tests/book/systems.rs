@@ -1,4 +1,4 @@
-use super::U32;
+use super::Vel;
 use shipyard::{
     AddComponent, AllStoragesViewMut, Component, EntitiesViewMut, IntoIter, IntoWithId,
     IntoWorkload, SparseSet, View, ViewMut, Workload, World,
@@ -10,16 +10,11 @@ struct Position;
 struct Health;
 
 #[derive(Component)]
-enum Season {
-    Spring,
-}
-
-#[derive(Component)]
 struct Precipitation(f32);
 
 #[allow(unused)]
 // ANCHOR: create_ints
-fn create_ints(mut entities: EntitiesViewMut, mut u32s: ViewMut<U32>) {
+fn create_ints(mut entities: EntitiesViewMut, mut vm_vel: ViewMut<Vel>) {
     // -- snip --
 }
 // ANCHOR_END: create_ints
@@ -37,60 +32,25 @@ world.run(create_ints);
 #[test]
 #[allow(unused)]
 #[rustfmt::skip]
-fn single_run_with_data() {
-// ANCHOR: in_acid
-fn in_acid(season: Season, positions: View<Position>, mut healths: ViewMut<Health>) {
-    // -- snip --
-}
-
-let world = World::new();
-
-world.run_with_data(in_acid, Season::Spring);
-// ANCHOR_END: in_acid
-}
-
-#[test]
-#[allow(unused)]
-#[rustfmt::skip]
-fn multiple_run_with_data() {
-// ANCHOR: in_acid_multiple
-fn in_acid(
-    (season, precipitation): (Season, Precipitation),
-    positions: View<Position>,
-    mut healths: ViewMut<Health>,
-) {
-    // -- snip --
-}
-
-let world = World::new();
-
-world
-    .run_with_data(in_acid, (Season::Spring, Precipitation(0.1)));
-// ANCHOR_END: in_acid_multiple
-}
-
-#[test]
-#[allow(unused)]
-#[rustfmt::skip]
 fn workload() {
 // ANCHOR: workload
-fn create_ints(mut entities: EntitiesViewMut, mut u32s: ViewMut<U32>) {
+fn create_ints(mut entities: EntitiesViewMut, mut vm_vel: ViewMut<Vel>) {
     // -- snip --
 }
 
-fn delete_ints(mut u32s: ViewMut<U32>) {
+fn delete_ints(mut vm_vel: ViewMut<Vel>) {
     // -- snip --
+}
+
+fn int_cycle() -> Workload {
+    (create_ints, delete_ints).into_workload()
 }
 
 let world = World::new();
 
-Workload::new("Int cycle")
-    .with_system(create_ints)
-    .with_system(delete_ints)
-    .add_to_world(&world)
-    .unwrap();
+world.add_workload(int_cycle);
 
-world.run_workload("Int cycle").unwrap();
+world.run_workload(int_cycle).unwrap();
 // ANCHOR_END: workload
 }
 
@@ -101,30 +61,30 @@ fn workload_nesting() {
 #[derive(Component)]
 struct Dead<T: 'static>(core::marker::PhantomData<T>);
 
-fn increment(mut u32s: ViewMut<U32>) {
-    for mut i in (&mut u32s).iter() {
-        i.0 += 1;
+fn increment(mut vm_vel: ViewMut<Vel>) {
+    for mut i in (&mut vm_vel).iter() {
+        i.0 += 1.0;
     }
 }
 
-fn flag_deleted_u32s(u32s: View<U32>, mut deads: ViewMut<Dead<u32>>) {
-    for (id, i) in u32s.iter().with_id() {
-        if i.0 > 100 {
+fn flag_deleted_vel(v_vel: View<Vel>, mut deads: ViewMut<Dead<Vel>>) {
+    for (id, i) in v_vel.iter().with_id() {
+        if i.0 > 100.0 {
             deads.add_component_unchecked(id, Dead(core::marker::PhantomData));
         }
     }
 }
 
-fn clear_deleted_u32s(mut all_storages: AllStoragesViewMut) {
-    all_storages.delete_any::<SparseSet<Dead<u32>>>();
+fn clear_deleted_vel(mut all_storages: AllStoragesViewMut) {
+    all_storages.delete_any::<SparseSet<Dead<Vel>>>();
 }
 
-fn filter_u32() -> Workload {
-    (flag_deleted_u32s, clear_deleted_u32s).into_workload()
+fn filter_vel() -> Workload {
+    (flag_deleted_vel, clear_deleted_vel).into_workload()
 }
 
 fn main_loop() -> Workload {
-    (increment, filter_u32).into_workload()
+    (increment, filter_vel).into_workload()
 }
 
 let world = World::new();

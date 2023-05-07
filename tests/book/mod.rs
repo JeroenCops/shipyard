@@ -1,4 +1,4 @@
-use shipyard::{track, Component};
+use shipyard::Component;
 
 mod add_components;
 mod add_entity;
@@ -18,22 +18,39 @@ mod syntactic_peculiarities;
 mod systems;
 mod uniques;
 mod world;
-mod world_insides;
 
+// ANCHOR: component_manual
 #[derive(Debug)]
-struct USIZE(usize);
-impl Component for USIZE {
-    type Tracking = track::Untracked;
+struct Pos(f32, f32);
+impl Component for Pos {
+    // We'll come back to this in a later chapter
 }
 
 #[derive(Debug)]
-struct U32(u32);
-impl Component for U32 {
-    type Tracking = track::Untracked;
+struct Vel(f32, f32);
+impl Component for Vel {}
+// ANCHOR_END: component_manual
+
+impl Pos {
+    fn new() -> Pos {
+        Pos(0.0, 0.0)
+    }
 }
 
-#[derive(Debug)]
-struct F32(f32);
-impl Component for F32 {
-    type Tracking = track::Untracked;
+impl Vel {
+    fn new() -> Vel {
+        Vel(0.0, 0.0)
+    }
+}
+
+#[rustfmt::skip]
+#[allow(unused)]
+fn component_derive() {
+// ANCHOR: component_derive
+#[derive(Component, Debug)]
+struct Pos(f32, f32);
+
+#[derive(Component, Debug)]
+struct Vel(f32, f32);
+// ANCHOR_END: component_derive
 }

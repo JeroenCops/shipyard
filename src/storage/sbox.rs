@@ -18,7 +18,7 @@ impl Drop for SBox {
     fn drop(&mut self) {
         // SAFE the pointer came from a `Box` of the same type
         unsafe {
-            Box::from_raw(self.0);
+            let _ = Box::from_raw(self.0);
         }
     }
 }
@@ -52,7 +52,7 @@ impl SBox {
 impl core::fmt::Debug for SBox {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         if let Ok(storage) = unsafe { &*self.0 }.borrow() {
-            f.write_str(&*storage.name())
+            f.write_str(&storage.name())
         } else {
             f.write_str("Could not borrow storage")
         }

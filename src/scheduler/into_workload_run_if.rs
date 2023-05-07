@@ -1,5 +1,5 @@
 use crate::all_storages::AllStorages;
-use crate::borrow::{Borrow, BorrowInfo, IntoBorrow, Mutability};
+use crate::borrow::{BorrowInfo, Mutability, WorldBorrow};
 use crate::error;
 use crate::scheduler::system::{RunIf, WorkloadRunIfFn};
 use crate::scheduler::TypeInfo;
@@ -36,14 +36,14 @@ impl IntoRunIf<RunIf> for RunIf {
 
 macro_rules! impl_into_workload_run_if {
     ($(($type: ident, $index: tt))+) => {
-        impl<$($type: IntoBorrow + BorrowInfo,)+ Func> IntoRunIf<($($type,)+)> for Func
+        impl<$($type: WorldBorrow + BorrowInfo,)+ Func> IntoRunIf<($($type,)+)> for Func
         where
             Func: 'static
                 + Send
                 + Sync,
             for<'a, 'b> &'b Func:
                 Fn($($type),+) -> bool
-                + Fn($(<$type::Borrow as Borrow<'a>>::View),+) -> bool {
+                + Fn($($type::WorldView<'a>),+) -> bool {
 
             fn into_workload_run_if(self) -> Result<RunIf, error::InvalidSystem> {
                 let system_id = TypeId::of::<Func>();
@@ -87,7 +87,7 @@ macro_rules! impl_into_workload_run_if {
                         let current = world.get_current();
                         let last_run = last_run.swap(current, Ordering::Acquire);
                         let system_id = TypeId::of::<Func>();
-                        Ok((&&self)($($type::Borrow::borrow(&world, Some(system_id), Some(last_run), current)?),+))
+                        Ok((&&self)($($type::world_borrow(&world, Some(system_id), Some(last_run), current)?),+))
                     }),
                 })
             }
@@ -122,7 +122,7 @@ where
 
 macro_rules! impl_into_workload_run_if {
     ($(($type: ident, $index: tt))+) => {
-        impl<$($type: IntoBorrow + BorrowInfo,)+ Func> IntoWorkloadRunIf<($($type,)+)> for Func
+        impl<$($type: WorldBorrow + BorrowInfo,)+ Func> IntoWorkloadRunIf<($($type,)+)> for Func
         where
             Func: 'static
                 + Send
@@ -130,7 +130,7 @@ macro_rules! impl_into_workload_run_if {
                 + Clone,
             for<'a, 'b> &'b Func:
                 Fn($($type),+) -> bool
-                + Fn($(<$type::Borrow as Borrow<'a>>::View),+) -> bool {
+                + Fn($($type::WorldView<'a>),+) -> bool {
 
             fn into_workload_run_if(self) -> Result<Box<dyn WorkloadRunIfFn>, error::InvalidSystem> {
                 let system_id = TypeId::of::<Func>();
@@ -173,7 +173,7 @@ macro_rules! impl_into_workload_run_if {
                     let current = world.get_current();
                     let last_run = last_run.swap(current, Ordering::Acquire);
                     let system_id = TypeId::of::<Func>();
-                    Ok((&&self)($($type::Borrow::borrow(&world, Some(system_id), Some(last_run), current)?),+))
+                    Ok((&&self)($($type::world_borrow(&world, Some(system_id), Some(last_run), current)?),+))
                 }))
             }
         }

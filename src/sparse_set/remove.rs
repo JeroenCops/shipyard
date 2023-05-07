@@ -14,31 +14,22 @@ pub trait TupleRemove {
     fn remove(all_storages: &mut AllStorages, entity: EntityId) -> Self::Out;
 }
 
-impl<T: Send + Sync + Component> TupleRemove for (T,)
-where
-    T::Tracking: Send + Sync,
-{
-    type Out = (Option<T>,);
+impl<T: Send + Sync + Component> TupleRemove for T {
+    type Out = Option<T>;
 
     #[inline]
     fn remove(all_storages: &mut AllStorages, entity: EntityId) -> Self::Out {
         let current = all_storages.get_current();
 
-        (all_storages
-            .exclusive_storage_or_insert_mut(
-                StorageId::of::<SparseSet<T, T::Tracking>>(),
-                SparseSet::new,
-            )
-            .remove(entity, current),)
+        all_storages
+            .exclusive_storage_or_insert_mut(StorageId::of::<SparseSet<T>>(), SparseSet::new)
+            .dyn_remove(entity, current)
     }
 }
 
 macro_rules! impl_remove_component {
     ($(($type: ident, $index: tt))+) => {
-        impl<$($type: Send + Sync + Component,)+> TupleRemove for ($($type,)+)
-        where
-            $($type::Tracking: Send + Sync),+
-        {
+        impl<$($type: Send + Sync + Component,)+> TupleRemove for ($($type,)+) {
             type Out = ($(Option<$type>,)+);
 
             fn remove(all_storages: &mut AllStorages, entity: EntityId) -> Self::Out {
@@ -46,8 +37,8 @@ macro_rules! impl_remove_component {
 
                 ($(
                     all_storages
-                        .exclusive_storage_or_insert_mut(StorageId::of::<SparseSet<$type, $type::Tracking>>(), SparseSet::new)
-                        .remove(entity, current),
+                        .exclusive_storage_or_insert_mut(StorageId::of::<SparseSet<$type>>(), SparseSet::new)
+                        .dyn_remove(entity, current),
                 )+)
             }
         }
@@ -64,4 +55,4 @@ macro_rules! remove_component {
     }
 }
 
-remove_component![(A, 0) (B, 1); (C, 2) (D, 3) (E, 4) (F, 5) (G, 6) (H, 7) (I, 8) (J, 9)];
+remove_component![(A, 0); (B, 1) (C, 2) (D, 3) (E, 4) (F, 5) (G, 6) (H, 7) (I, 8) (J, 9)];

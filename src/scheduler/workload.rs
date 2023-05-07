@@ -1,28 +1,25 @@
 use crate::all_storages::AllStorages;
 use crate::borrow::Mutability;
+use crate::component::{Component, Unique};
 use crate::scheduler::info::{
     BatchInfo, Conflict, DedupedLabels, SystemId, SystemInfo, TypeInfo, WorkloadInfo,
 };
-use crate::scheduler::into_workload_run_if::IntoWorkloadRunIf;
 use crate::scheduler::label::{SystemLabel, WorkloadLabel};
 use crate::scheduler::system::{ExtractWorkloadRunIf, WorkloadRunIfFn};
-use crate::scheduler::{AsLabel, Batches, Label, Scheduler, WorkloadSystem};
-use crate::type_id::TypeId;
-use crate::world::World;
-use crate::{
-    error, track, AllStoragesViewMut, Component, IntoWorkload, IntoWorkloadSystem, SparseSet,
-    Unique, UniqueStorage,
-};
-// this is the macro, not the module
+use crate::scheduler::{AsLabel, Batches, IntoWorkloadTrySystem, Label, Scheduler, WorkloadSystem};
 use crate::storage::StorageId;
+use crate::type_id::TypeId;
+use crate::unique::UniqueStorage;
+use crate::world::World;
+use crate::{error, IntoWorkload, IntoWorkloadSystem};
 use alloc::boxed::Box;
+use alloc::format;
 // macro not module
 use alloc::vec;
 use alloc::vec::Vec;
 use core::any::type_name;
 #[cfg(not(feature = "std"))]
 use core::any::Any;
-use core::ops::Not;
 use hashbrown::HashMap;
 #[cfg(feature = "std")]
 use std::error::Error;
@@ -33,6 +30,7 @@ use std::error::Error;
 ///
 /// [`Workload`]: crate::Workload
 /// [`Workload::new`]: crate::Workload::new()
+#[allow(clippy::type_complexity)]
 pub struct ScheduledWorkload {
     name: Box<dyn Label>,
     #[allow(clippy::type_complexity)]
@@ -43,6 +41,7 @@ pub struct ScheduledWorkload {
     // system's `TypeId` to an index into both systems and system_names
     #[allow(unused)]
     lookup_table: HashMap<TypeId, usize>,
+    tracking_to_enable: Vec<fn(&AllStorages) -> Result<(), error::GetStorage>>,
     /// workload name to list of "batches"
     workloads: HashMap<Box<dyn Label>, Batches>,
 }
@@ -66,11 +65,34 @@ impl ScheduledWorkload {
             &self.name,
         )
     }
+
+    /// Apply tracking to all storages using it during this workload.
+    ///
+    /// ### Borrows
+    ///
+    /// - [`AllStorages`] (shared)
+    /// - Systems' storage (exclusive) to enable tracking
+    ///
+    /// ### Errors
+    ///
+    /// - [`AllStorages`] borrow failed.
+    /// - Storage borrow failed.
+    pub fn apply_tracking(&self, world: &World) -> Result<(), error::GetStorage> {
+        let all_storages = world
+            .all_storages()
+            .map_err(error::GetStorage::AllStoragesBorrow)?;
+
+        for enable_tracking_fn in &self.tracking_to_enable {
+            (enable_tracking_fn)(&all_storages)?;
+        }
+
+        Ok(())
+    }
 }
 
 impl World {
     /// Creates a new workload and store it in the [`World`](crate::World).
-    pub fn add_workload<Views, R, W, F: Fn() -> W + 'static>(&self, workload: F)
+    pub fn add_workload<Views, R, W, F: Fn() -> W + 'static>(&self, workload: F) -> WorkloadInfo
     where
         W: IntoWorkload<Views, R>,
     {
@@ -92,7 +114,7 @@ impl World {
             })
         };
 
-        w.add_to_world(self).unwrap();
+        w.add_to_world(self).unwrap()
     }
 }
 
@@ -111,6 +133,7 @@ pub struct Workload {
     pub(super) overwritten_name: bool,
     pub(super) require_before: DedupedLabels,
     pub(super) require_after: DedupedLabels,
+    pub(super) barriers: Vec<usize>,
 }
 
 impl Workload {
@@ -168,6 +191,7 @@ impl Workload {
             overwritten_name: false,
             require_before: DedupedLabels::new(),
             require_after: DedupedLabels::new(),
+            barriers: Vec::new(),
         }
     }
     /// Moves all systems of `other` into `Self`, leaving `other` empty.  
@@ -179,11 +203,19 @@ impl Workload {
     }
     /// Propagates all information from `self` and `other` into their respective systems before merging their systems.  
     /// This includes `run_if`/`skip_if`, `tags`, `before`/`after` requirements.
-    pub fn merge(mut self, other: &mut Workload) -> Workload {
+    pub fn merge(mut self, mut other: Workload) -> Workload {
         self.propagate();
         other.propagate();
 
-        self.append(other)
+        let systems_len = self.systems.len();
+        self.barriers.extend(
+            other
+                .barriers
+                .drain(..)
+                .map(|barrier| barrier + systems_len),
+        );
+
+        self.append(&mut other)
     }
     /// Propagates all information into the systems.  
     /// This includes `run_if`/`skip_if`, `tags`, `before`/`after` requirements.
@@ -194,7 +226,7 @@ impl Workload {
                 (None, Some(run_if)) => Some(run_if.to_non_clone()),
                 (Some(run_if), None) => Some(run_if),
                 (Some(system_run_if), Some(workload_run_if)) => Some(Box::new(move |world| {
-                    Ok((system_run_if)(world)? && workload_run_if.clone().run(world)?)
+                    Ok(workload_run_if.clone().run(world)? && (system_run_if)(world)?)
                 })),
             };
 
@@ -311,7 +343,7 @@ impl Workload {
         Ok,
         Err: 'static + Into<Box<dyn Error + Send + Sync>>,
         R: Into<Result<Ok, Err>>,
-        S: IntoWorkloadSystem<B, R>,
+        S: IntoWorkloadTrySystem<B, R>,
     >(
         mut self,
         system: S,
@@ -364,7 +396,7 @@ impl Workload {
         Ok,
         Err: 'static + Send + Any,
         R: Into<Result<Ok, Err>>,
-        S: IntoWorkloadSystem<B, R>,
+        S: IntoWorkloadTrySystem<B, R>,
     >(
         mut self,
         system: S,
@@ -380,14 +412,16 @@ impl Workload {
     /// ### Borrows
     ///
     /// - Scheduler (exclusive)
+    /// - [`AllStorages`] (shared)
+    /// - Systems' storage (exclusive) to enable tracking
     ///
     /// ### Errors
     ///
     /// - Scheduler borrow failed.
     /// - Workload with an identical name already present.
     /// - Nested workload is not present in `world`.
-    ///
-    /// [`World`]: crate::World
+    /// - [`AllStorages`] borrow failed.
+    /// - Storage borrow failed.
     #[allow(clippy::blocks_in_if_conditions)]
     pub fn add_to_world(self, world: &World) -> Result<WorkloadInfo, error::AddWorkload> {
         let Scheduler {
@@ -402,15 +436,33 @@ impl Workload {
             .borrow_mut()
             .map_err(|_| error::AddWorkload::Borrow)?;
 
-        create_workload(
+        let mut tracking_to_enable = Vec::new();
+
+        let workload_info = create_workload(
             self,
             systems,
             system_names,
             system_generators,
             lookup_table,
+            &mut tracking_to_enable,
             workloads,
             default,
-        )
+        )?;
+
+        let all_storages = world
+            .all_storages()
+            .map_err(|_| error::AddWorkload::TrackingAllStoragesBorrow)?;
+
+        for enable_tracking_fn in &tracking_to_enable {
+            (enable_tracking_fn)(&all_storages).map_err(|err| match err {
+                error::GetStorage::StorageBorrow { name, id, borrow } => {
+                    error::AddWorkload::TrackingStorageBorrow { name, id, borrow }
+                }
+                _ => unreachable!(),
+            })?;
+        }
+
+        Ok(workload_info)
     }
     /// Returns the first [`Unique`] storage borrowed by this workload that is not present in `world`.\
     /// If the workload contains nested workloads they have to be present in the `World`.
@@ -424,12 +476,8 @@ impl Workload {
     ) -> Result<(), error::UniquePresence> {
         struct ComponentType;
 
-        impl Component for ComponentType {
-            type Tracking = track::Untracked;
-        }
-        impl Unique for ComponentType {
-            type Tracking = track::Untracked;
-        }
+        impl Component for ComponentType {}
+        impl Unique for ComponentType {}
 
         let all_storages = world
             .all_storages
@@ -458,6 +506,7 @@ impl Workload {
             system_names: Vec::new(),
             system_generators: Vec::new(),
             lookup_table: HashMap::new(),
+            tracking_to_enable: Vec::new(),
             workloads: HashMap::new(),
         };
 
@@ -469,127 +518,16 @@ impl Workload {
             &mut workload.system_names,
             &mut workload.system_generators,
             &mut workload.lookup_table,
+            &mut workload.tracking_to_enable,
             &mut workload.workloads,
             &mut default,
         )?;
 
         Ok((workload, workload_info))
     }
-    /// Only run the system if the function evaluates to `true`.
-    #[track_caller]
-    pub fn run_if<RunB, Run: IntoWorkloadRunIf<RunB>>(mut self, run_if: Run) -> Workload {
-        let run_if = run_if.into_workload_run_if().unwrap();
-
-        self.run_if = if let Some(prev_run_if) = self.run_if.take() {
-            Some(Box::new(move |world: &World| {
-                Ok(prev_run_if.run(world)? && run_if.run(world)?)
-            }))
-        } else {
-            Some(run_if)
-        };
-
-        self
-    }
-    /// Only run the system if the `T` storage is empty.
-    ///
-    /// If the storage is not present it is considered empty.
-    /// If the storage is already borrowed, assume it's not empty.
-    pub fn run_if_storage_empty<T: Component>(self) -> Workload {
-        let storage_id = StorageId::of::<SparseSet<T>>();
-        self.run_if_storage_empty_by_id(storage_id)
-    }
-    /// Only run the system if the `T` unique storage is not present in the `World`.
-    pub fn run_if_missing_unique<T: Unique>(self) -> Workload {
-        let storage_id = StorageId::of::<UniqueStorage<T>>();
-        self.run_if_storage_empty_by_id(storage_id)
-    }
-    /// Only run the system if the storage is empty.
-    ///
-    /// If the storage is not present it is considered empty.
-    /// If the storage is already borrowed, assume it's not empty.
-    pub fn run_if_storage_empty_by_id(self, storage_id: StorageId) -> Workload {
-        use crate::all_storages::CustomStorageAccess;
-
-        let run_if = move |all_storages: AllStoragesViewMut<'_>| match all_storages
-            .custom_storage_by_id(storage_id)
-        {
-            Ok(storage) => storage.is_empty(),
-            Err(error::GetStorage::MissingStorage { .. }) => true,
-            Err(_) => false,
-        };
-
-        self.run_if(run_if)
-    }
-    /// Do not run the workload if the function evaluates to `true`.
-    pub fn skip_if<RunB, Run: IntoWorkloadRunIf<RunB>>(mut self, should_skip: Run) -> Self {
-        let mut should_skip = should_skip.into_workload_run_if().unwrap();
-
-        should_skip = Box::new(move |world: &World| should_skip.run(world).map(Not::not));
-
-        self.run_if = if let Some(prev_run_if) = self.run_if.take() {
-            Some(Box::new(move |world: &World| {
-                Ok(prev_run_if.run(world)? && should_skip.run(world)?)
-            }))
-        } else {
-            Some(should_skip)
-        };
-
-        self
-    }
-    /// Do not run the workload if the `T` storage is empty.
-    ///
-    /// If the storage is not present it is considered empty.
-    /// If the storage is already borrowed, assume it's not empty.
-    pub fn skip_if_storage_empty<T: Component>(self) -> Self {
-        let storage_id = StorageId::of::<SparseSet<T>>();
-        self.skip_if_storage_empty_by_id(storage_id)
-    }
-    /// Do not run the workload if the `T` unique storage is not present in the `World`.
-    pub fn skip_if_missing_unique<T: Unique>(self) -> Self {
-        let storage_id = StorageId::of::<UniqueStorage<T>>();
-        self.skip_if_storage_empty_by_id(storage_id)
-    }
-    /// Do not run the workload if the storage is empty.
-    ///
-    /// If the storage is not present it is considered empty.
-    /// If the storage is already borrowed, assume it's not empty.
-    pub fn skip_if_storage_empty_by_id(self, storage_id: StorageId) -> Self {
-        use crate::all_storages::CustomStorageAccess;
-
-        let should_skip = move |all_storages: AllStoragesViewMut<'_>| match all_storages
-            .custom_storage_by_id(storage_id)
-        {
-            Ok(storage) => storage.is_empty(),
-            Err(error::GetStorage::MissingStorage { .. }) => true,
-            Err(_) => false,
-        };
-
-        self.skip_if(should_skip)
-    }
-    /// When building a workload, all systems within this workload will be placed before all invocation of the other system or workload.
-    pub fn before_all<T>(mut self, other: impl AsLabel<T>) -> Workload {
-        self.before_all.add(other);
-
-        self
-    }
-    /// When building a workload, all systems within this workload will be placed after all invocation of the other system or workload.
-    pub fn after_all<T>(mut self, other: impl AsLabel<T>) -> Workload {
-        self.after_all.add(other);
-
-        self
-    }
-    /// Changes the name of this workload.
-    pub fn rename<T>(mut self, name: impl AsLabel<T>) -> Workload {
-        self.name = name.as_label();
-        self.overwritten_name = true;
-        self.tags.push(self.name.clone());
-
-        self
-    }
-    /// Adds a tag to this workload. Tags can be used to control system ordering when running workloads.
-    #[track_caller]
-    pub fn tag<T>(mut self, tag: impl AsLabel<T>) -> Workload {
-        self.tags.push(tag.as_label());
+    /// Stop parallelism between systems before and after the barrier.
+    pub fn with_barrier(mut self) -> Self {
+        self.barriers.push(self.systems.len());
 
         self
     }
@@ -621,6 +559,7 @@ fn create_workload(
     system_names: &mut Vec<Box<dyn Label>>,
     system_generators: &mut Vec<Box<dyn Fn(&mut Vec<TypeInfo>) -> TypeId + Send + Sync + 'static>>,
     lookup_table: &mut HashMap<TypeId, usize>,
+    tracking_to_enable: &mut Vec<fn(&AllStorages) -> Result<(), error::GetStorage>>,
     workloads: &mut HashMap<Box<dyn Label>, Batches>,
     default: &mut Box<dyn Label>,
 ) -> Result<WorkloadInfo, error::AddWorkload> {
@@ -628,10 +567,26 @@ fn create_workload(
         return Err(error::AddWorkload::AlreadyExists);
     }
 
+    for index in builder.barriers.drain(..) {
+        let tag = format!("__barrier__{}", index);
+
+        for system in &mut builder.systems[..index] {
+            system.tags.push(Box::new(tag.clone()));
+        }
+
+        for system in &mut builder.systems[index..] {
+            system.after_all.add(tag.clone());
+        }
+    }
+
     let mut collected_systems: Vec<(usize, WorkloadSystem)> =
         Vec::with_capacity(builder.systems.len());
 
-    for system in builder.systems.drain(..) {
+    for mut system in builder.systems.drain(..) {
+        for tracking_to_enable_fn in system.tracking_to_enable.drain(..) {
+            tracking_to_enable.push(tracking_to_enable_fn);
+        }
+
         insert_system_in_scheduler(
             system,
             systems,
@@ -1432,7 +1387,13 @@ fn insert_before_after_system(
                 }
             }
         } else {
-            for other_system in &workload_info.batch_info[parallel_position].systems.1 {
+            for other_system in workload_info.batch_info[parallel_position]
+                .systems
+                .0
+                .as_ref()
+                .into_iter()
+                .chain(&workload_info.batch_info[parallel_position].systems.1)
+            {
                 check_conflict(other_system, &borrow_constraints, &mut conflict);
 
                 if conflict.is_some() {
@@ -1658,30 +1619,21 @@ fn insert_system_in_scheduler(
 mod tests {
     use super::*;
     use crate::component::{Component, Unique};
-    use crate::{track, IntoWorkload, UniqueView, UniqueViewMut, View};
+    use crate::{
+        AllStoragesViewMut, IntoWorkload, SystemModificator, UniqueView, UniqueViewMut, View,
+        WorkloadModificator,
+    };
 
     struct Usize(usize);
     struct U32(u32);
     struct U16(u16);
 
-    impl Component for Usize {
-        type Tracking = track::Untracked;
-    }
-    impl Component for U32 {
-        type Tracking = track::Untracked;
-    }
-    impl Component for U16 {
-        type Tracking = track::Untracked;
-    }
-    impl Unique for Usize {
-        type Tracking = track::Untracked;
-    }
-    impl Unique for U32 {
-        type Tracking = track::Untracked;
-    }
-    impl Unique for U16 {
-        type Tracking = track::Untracked;
-    }
+    impl Component for Usize {}
+    impl Component for U32 {}
+    impl Component for U16 {}
+    impl Unique for Usize {}
+    impl Unique for U32 {}
+    impl Unique for U16 {}
 
     #[test]
     fn single_immutable() {
@@ -2010,9 +1962,7 @@ mod tests {
 
         struct NotSend(*const ());
         unsafe impl Sync for NotSend {}
-        impl Component for NotSend {
-            type Tracking = track::Untracked;
-        }
+        impl Component for NotSend {}
 
         fn sys1(_: NonSend<View<'_, NotSend>>) {}
         fn sys2(_: NonSend<ViewMut<'_, NotSend>>) {}
@@ -2263,7 +2213,7 @@ mod tests {
         let world = World::new();
 
         Workload::new("test")
-            .with_system((|| panic!()).skip_if_storage_empty::<Usize>())
+            .with_system((|| -> () { panic!() }).skip_if_storage_empty::<Usize>())
             .build()
             .unwrap()
             .0
@@ -2271,7 +2221,7 @@ mod tests {
             .unwrap();
 
         Workload::new("test")
-            .with_system((|| panic!()).skip_if_storage_empty::<Usize>())
+            .with_system((|| -> () { panic!() }).skip_if_storage_empty::<Usize>())
             .add_to_world(&world)
             .unwrap();
 
@@ -2287,7 +2237,7 @@ mod tests {
 
         Workload::new("test")
             .skip_if_storage_empty::<Usize>()
-            .with_system(|| panic!())
+            .with_system(|| -> () { panic!() })
             .build()
             .unwrap()
             .0
@@ -2296,7 +2246,7 @@ mod tests {
 
         Workload::new("test")
             .skip_if_storage_empty::<Usize>()
-            .with_system(|| panic!())
+            .with_system(|| -> () { panic!() })
             .add_to_world(&world)
             .unwrap();
 
@@ -2311,7 +2261,7 @@ mod tests {
         world.remove::<(Usize,)>(eid);
 
         Workload::new("test")
-            .with_system((|| panic!()).skip_if_storage_empty::<Usize>())
+            .with_system((|| -> () { panic!() }).skip_if_storage_empty::<Usize>())
             .build()
             .unwrap()
             .0
@@ -2319,7 +2269,7 @@ mod tests {
             .unwrap();
 
         Workload::new("test")
-            .with_system((|| panic!()).skip_if_storage_empty::<Usize>())
+            .with_system((|| -> () { panic!() }).skip_if_storage_empty::<Usize>())
             .add_to_world(&world)
             .unwrap();
 
@@ -2334,7 +2284,7 @@ mod tests {
 
         world.add_workload(|| {
             (
-                (|| panic!())
+                (|| -> () { panic!() })
                     .into_workload()
                     .skip_if_missing_unique::<U32>(),
                 (|mut u: UniqueViewMut<'_, Usize>| u.0 += 1).into_workload(),
@@ -2464,7 +2414,7 @@ mod tests {
 
         // HashMap makes this error random between a and c
         let batches = &workload.workloads[&"".as_label()];
-        assert!(batches.sequential == &[0, 1] || batches.sequential == &[1, 0]);
+        assert!(batches.sequential == [0, 1] || batches.sequential == [1, 0]);
         assert_eq!(batches.parallel, &[(None, vec![0, 1])]);
     }
 
@@ -2509,6 +2459,29 @@ mod tests {
     }
 
     #[test]
+    fn after_all_single_system() {
+        let (workload, _) = Workload::new("")
+            .with_system((|| {}).tag("this"))
+            .with_system((|_: AllStoragesViewMut<'_>| {}).after_all("this"))
+            .with_system((|_: View<'_, Usize>| {}).after_all("this"))
+            .build()
+            .unwrap();
+
+        let batches = &workload.workloads[&"".as_label()];
+
+        assert_eq!(
+            batches,
+            &Batches {
+                parallel: vec![(None, vec![0]), (None, vec![2]), (Some(1), vec![])],
+                parallel_run_if: Vec::new(),
+                sequential: vec![0, 1, 2],
+                sequential_run_if: Vec::new(),
+                run_if: None,
+            }
+        );
+    }
+
+    #[test]
     fn sequential_workload() {
         fn sys0() {}
         fn sys1() {}
@@ -2518,7 +2491,7 @@ mod tests {
             (sys0, sys1).into_workload()
         }
 
-        let (workload, _) = (workload1, sys2, sys3)
+        let (workload, _) = (workload1.before_all(sys2), sys2, sys3)
             .into_sequential_workload()
             .rename("")
             .build()
@@ -2549,5 +2522,64 @@ mod tests {
             &[(None, vec![0]), (Some(1), Vec::new()), (None, vec![0])]
         );
         assert_eq!(batches.sequential, &[0, 1, 0]);
+    }
+
+    #[test]
+    fn contains() {
+        fn type_name_of<T: 'static>(_: &T) -> &'static str {
+            type_name::<T>()
+        }
+
+        fn w() -> Workload {
+            (|| {}).into_workload()
+        }
+        let world = World::new_with_custom_lock::<parking_lot::RawRwLock>();
+        world.add_workload(w);
+        assert!(world.contains_workload(WorkloadLabel {
+            type_id: TypeId::of_val(&w),
+            name: type_name_of(&w).as_label()
+        }));
+        assert!(world.contains_workload(w));
+        world.run_workload(w).unwrap();
+    }
+
+    #[test]
+    fn barrier() {
+        let workload = Workload::new("")
+            .with_system(|| {})
+            .with_system(|| {})
+            .with_barrier()
+            .with_system(|| {})
+            .with_system(|| {})
+            .with_barrier()
+            .with_system(|| {})
+            .with_system(|| {})
+            .build()
+            .unwrap();
+
+        assert_eq!(workload.1.batch_info.len(), 3);
+
+        let workload = Workload::new("")
+            .with_barrier()
+            .with_system(|| {})
+            .with_system(|| {})
+            .build()
+            .unwrap();
+
+        assert_eq!(workload.1.batch_info.len(), 1);
+
+        let workload = Workload::new("")
+            .with_system(|| {})
+            .with_system(|| {})
+            .with_barrier()
+            .build()
+            .unwrap();
+
+        assert_eq!(workload.1.batch_info.len(), 1);
+    }
+
+    #[test]
+    fn with_system_return_type() {
+        Workload::new("").with_system(|| 0usize).build().unwrap();
     }
 }

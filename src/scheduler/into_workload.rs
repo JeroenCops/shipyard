@@ -1,17 +1,25 @@
-use core::any::{type_name, Any};
-
 use crate::info::DedupedLabels;
-use crate::scheduler::label::{SequentialLabel, SystemLabel, WorkloadLabel};
+use crate::scheduler::label::{SequentialLabel, WorkloadLabel};
 use crate::scheduler::workload::Workload;
 use crate::scheduler::IntoWorkloadSystem;
 use crate::type_id::TypeId;
-use crate::AsLabel;
+use crate::{AsLabel, WorkloadModificator};
 use alloc::vec::Vec;
+use core::any::{type_name, Any};
+use core::sync::atomic::{AtomicU64, Ordering};
 // macro not module
 use alloc::boxed::Box;
+use alloc::string::ToString;
 use alloc::vec;
 
+static WORKLOAD_ID: AtomicU64 = AtomicU64::new(1);
+fn unique_id() -> u64 {
+    WORKLOAD_ID.fetch_add(1, Ordering::Relaxed)
+}
+
 /// Converts to a collection of systems.
+///
+/// To modify the workload execution see [WorkloadModificator](crate::WorkloadModificator).
 pub trait IntoWorkload<Views, R> {
     /// Converts to a collection of systems.
     ///
@@ -52,13 +60,13 @@ pub trait IntoWorkload<Views, R> {
     /// }
     ///
     /// fn meal(mut fats: ViewMut<Fat>) {
-    ///     for fat in (&mut fats).iter() {
+    ///     for mut fat in (&mut fats).iter() {
     ///         fat.0 += 3.0;
     ///     }
     /// }
     ///
     /// fn age(mut healths: ViewMut<Health>) {
-    ///     (&mut healths).iter().for_each(|health| {
+    ///     (&mut healths).iter().for_each(|mut health| {
     ///         health.0 -= 4.0;
     ///     });
     /// }
@@ -117,6 +125,14 @@ impl IntoWorkload<Workload, Workload> for Workload {
         self
     }
     fn into_sequential_workload(mut self) -> Workload {
+        let mut system_names = DedupedLabels::with_capacity(self.systems.len());
+
+        for system in &self.systems {
+            if !system_names.add(system.type_id.as_label()) {
+                panic!("{:?} appears twice in this workload. `into_sequential_workload` cannot currently handle this case.", system.display_name);
+            }
+        }
+
         for index in 0..self.systems.len() {
             if let Some(next_system) = self.systems.get(index + 1) {
                 let tag = SequentialLabel(next_system.type_id.as_label());
@@ -150,16 +166,16 @@ where
         } else {
             let system = self.into_workload_system().unwrap();
 
-            let system_label = system.label();
-            let system_label = system_label.as_any().downcast_ref::<SystemLabel>().unwrap();
-            let label = Box::new(WorkloadLabel {
-                type_id: system_label.type_id,
-                name: system_label.name.clone(),
+            let unique_id = unique_id();
+
+            let name = Box::new(WorkloadLabel {
+                type_id: TypeId(unique_id),
+                name: unique_id.to_string().as_label(),
             });
 
             Workload {
-                name: label.clone(),
-                tags: vec![label],
+                name: name.clone(),
+                tags: vec![name],
                 systems: vec![system],
                 run_if: None,
                 before_all: DedupedLabels::new(),
@@ -167,12 +183,19 @@ where
                 overwritten_name: false,
                 require_before: DedupedLabels::new(),
                 require_after: DedupedLabels::new(),
+                barriers: Vec::new(),
             }
         }
     }
 
     fn into_sequential_workload(self) -> Workload {
-        self.into_workload()
+        let workload = self.into_workload();
+
+        if TypeId::of::<R>() == TypeId::of::<Workload>() {
+            workload.into_sequential_workload()
+        } else {
+            workload
+        }
     }
 }
 
@@ -185,12 +208,11 @@ macro_rules! impl_into_workload {
             )+
         {
             fn into_workload(self) -> Workload {
-                let closure = || {};
-                let type_id = closure.type_id().into();
+                let unique_id = unique_id();
 
                 let name = Box::new(WorkloadLabel {
-                    type_id,
-                    name: type_id.as_label(),
+                    type_id: TypeId(unique_id),
+                    name: unique_id.to_string().as_label(),
                 });
 
                 let mut workload = Workload {
@@ -203,11 +225,12 @@ macro_rules! impl_into_workload {
                     overwritten_name: false,
                     require_before: DedupedLabels::new(),
                     require_after: DedupedLabels::new(),
+                    barriers: Vec::new(),
                 };
 
                 $(
-                    let mut w = self.$index.into_workload();
-                    workload = workload.merge(&mut w);
+                    let w = self.$index.into_workload();
+                    workload = workload.merge(w);
                 )+
 
                 workload
@@ -215,12 +238,11 @@ macro_rules! impl_into_workload {
 
             #[track_caller]
             fn into_sequential_workload(self) -> Workload {
-                let closure = || {};
-                let type_id = closure.type_id().into();
+                let unique_id = unique_id();
 
                 let name = Box::new(WorkloadLabel {
-                    type_id,
-                    name: type_id.as_label(),
+                    type_id: TypeId(unique_id),
+                    name: unique_id.to_string().as_label(),
                 });
 
                 let mut workload = Workload {
@@ -233,6 +255,7 @@ macro_rules! impl_into_workload {
                     overwritten_name: false,
                     require_before: DedupedLabels::new(),
                     require_after: DedupedLabels::new(),
+                    barriers: Vec::new(),
                 };
 
                 let mut sequential_tags = Vec::new();
@@ -253,7 +276,7 @@ macro_rules! impl_into_workload {
                         workloads.$index = workloads.$index.before_all(sequential_tag.clone());
                     }
 
-                    workload = workload.merge(&mut workloads.$index);
+                    workload = workload.merge(workloads.$index);
                 )+
 
                 let mut system_names = DedupedLabels::with_capacity(workload.systems.len());

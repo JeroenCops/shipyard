@@ -8,16 +8,21 @@ use crate::component::Component;
 use crate::entity_id::EntityId;
 use crate::r#mut::Mut;
 use crate::sparse_set::{FullRawWindow, FullRawWindowMut};
-use crate::track;
 
+#[allow(missing_docs)]
+#[allow(clippy::len_without_is_empty)]
 pub trait AbstractMut {
     type Out;
-    type Index;
+    type Index: Clone;
 
+    #[doc(hidden)]
     unsafe fn get_data(&self, index: usize) -> Self::Out;
+    #[doc(hidden)]
     unsafe fn get_datas(&self, index: Self::Index) -> Self::Out;
+    #[doc(hidden)]
     fn indices_of(&self, entity_id: EntityId, index: usize, mask: u16) -> Option<Self::Index>;
     #[inline]
+    #[doc(hidden)]
     fn indices_of_passenger(
         &self,
         entity_id: EntityId,
@@ -26,17 +31,20 @@ pub trait AbstractMut {
     ) -> Option<Self::Index> {
         self.indices_of(entity_id, index, mask)
     }
+    #[doc(hidden)]
     unsafe fn indices_of_unchecked(
         &self,
         entity_id: EntityId,
         index: usize,
         mask: u16,
     ) -> Self::Index;
+    #[doc(hidden)]
     unsafe fn get_id(&self, index: usize) -> EntityId;
+    #[doc(hidden)]
     fn len(&self) -> usize;
 }
 
-impl<'tmp, T: Component> AbstractMut for FullRawWindow<'tmp, T, T::Tracking> {
+impl<'tmp, T: Component> AbstractMut for FullRawWindow<'tmp, T> {
     type Out = &'tmp T;
     type Index = usize;
 
@@ -66,112 +74,16 @@ impl<'tmp, T: Component> AbstractMut for FullRawWindow<'tmp, T, T::Tracking> {
     }
 }
 
-impl<'tmp, T: Component<Tracking = track::Untracked>> AbstractMut
-    for FullRawWindowMut<'tmp, T, track::Untracked>
-{
-    type Out = &'tmp mut T;
-    type Index = usize;
-
-    #[inline]
-    unsafe fn get_data(&self, index: usize) -> Self::Out {
-        &mut *self.data.add(index)
-    }
-    #[inline]
-    unsafe fn get_datas(&self, index: Self::Index) -> Self::Out {
-        &mut *self.data.add(index)
-    }
-    #[inline]
-    fn indices_of(&self, entity_id: EntityId, _: usize, _: u16) -> Option<Self::Index> {
-        self.index_of(entity_id)
-    }
-    #[inline]
-    unsafe fn indices_of_unchecked(&self, entity_id: EntityId, _: usize, _: u16) -> Self::Index {
-        self.index_of_unchecked(entity_id)
-    }
-    #[inline]
-    unsafe fn get_id(&self, index: usize) -> EntityId {
-        *self.dense.add(index)
-    }
-    #[inline]
-    fn len(&self) -> usize {
-        self.dense_len
-    }
-}
-
-impl<'tmp, T: Component<Tracking = track::Insertion>> AbstractMut
-    for FullRawWindowMut<'tmp, T, track::Insertion>
-{
-    type Out = &'tmp mut T;
-    type Index = usize;
-
-    #[inline]
-    unsafe fn get_data(&self, index: usize) -> Self::Out {
-        &mut *self.data.add(index)
-    }
-    #[inline]
-    unsafe fn get_datas(&self, index: Self::Index) -> Self::Out {
-        &mut *self.data.add(index)
-    }
-    #[inline]
-    fn indices_of(&self, entity_id: EntityId, _: usize, _: u16) -> Option<Self::Index> {
-        self.index_of(entity_id)
-    }
-    #[inline]
-    unsafe fn indices_of_unchecked(&self, entity_id: EntityId, _: usize, _: u16) -> Self::Index {
-        self.index_of_unchecked(entity_id)
-    }
-    #[inline]
-    unsafe fn get_id(&self, index: usize) -> EntityId {
-        *self.dense.add(index)
-    }
-    #[inline]
-    fn len(&self) -> usize {
-        self.dense_len
-    }
-}
-
-impl<'tmp, T: Component<Tracking = track::Removal>> AbstractMut
-    for FullRawWindowMut<'tmp, T, track::Removal>
-{
-    type Out = &'tmp mut T;
-    type Index = usize;
-
-    #[inline]
-    unsafe fn get_data(&self, index: usize) -> Self::Out {
-        &mut *self.data.add(index)
-    }
-    #[inline]
-    unsafe fn get_datas(&self, index: Self::Index) -> Self::Out {
-        &mut *self.data.add(index)
-    }
-    #[inline]
-    fn indices_of(&self, entity_id: EntityId, _: usize, _: u16) -> Option<Self::Index> {
-        self.index_of(entity_id)
-    }
-    #[inline]
-    unsafe fn indices_of_unchecked(&self, entity_id: EntityId, _: usize, _: u16) -> Self::Index {
-        self.index_of_unchecked(entity_id)
-    }
-    #[inline]
-    unsafe fn get_id(&self, index: usize) -> EntityId {
-        *self.dense.add(index)
-    }
-    #[inline]
-    fn len(&self) -> usize {
-        self.dense_len
-    }
-}
-
-impl<'tmp, T: Component<Tracking = track::Modification>> AbstractMut
-    for FullRawWindowMut<'tmp, T, track::Modification>
-{
+impl<'tmp, T: Component> AbstractMut for FullRawWindowMut<'tmp, T> {
     type Out = Mut<'tmp, T>;
     type Index = usize;
 
     #[inline]
     unsafe fn get_data(&self, index: usize) -> Self::Out {
         Mut {
-            flag: Some(&mut *self.modification_data.add(index)),
+            flag: self
+                .is_tracking_modification
+                .then(|| &mut *self.modification_data.add(index)),
             current: self.current,
             data: &mut *self.data.add(index),
         }
@@ -179,47 +91,9 @@ impl<'tmp, T: Component<Tracking = track::Modification>> AbstractMut
     #[inline]
     unsafe fn get_datas(&self, index: Self::Index) -> Self::Out {
         Mut {
-            flag: Some(&mut *self.modification_data.add(index)),
-            current: self.current,
-            data: &mut *self.data.add(index),
-        }
-    }
-    #[inline]
-    fn indices_of(&self, entity_id: EntityId, _: usize, _: u16) -> Option<Self::Index> {
-        self.index_of(entity_id)
-    }
-    #[inline]
-    unsafe fn indices_of_unchecked(&self, entity_id: EntityId, _: usize, _: u16) -> Self::Index {
-        self.index_of_unchecked(entity_id)
-    }
-    #[inline]
-    unsafe fn get_id(&self, index: usize) -> EntityId {
-        *self.dense.add(index)
-    }
-    #[inline]
-    fn len(&self) -> usize {
-        self.dense_len
-    }
-}
-
-impl<'tmp, T: Component<Tracking = track::All>> AbstractMut
-    for FullRawWindowMut<'tmp, T, track::All>
-{
-    type Out = Mut<'tmp, T>;
-    type Index = usize;
-
-    #[inline]
-    unsafe fn get_data(&self, index: usize) -> Self::Out {
-        Mut {
-            flag: Some(&mut *self.modification_data.add(index)),
-            current: self.current,
-            data: &mut *self.data.add(index),
-        }
-    }
-    #[inline]
-    unsafe fn get_datas(&self, index: Self::Index) -> Self::Out {
-        Mut {
-            flag: Some(&mut *self.modification_data.add(index)),
+            flag: self
+                .is_tracking_modification
+                .then(|| &mut *self.modification_data.add(index)),
             current: self.current,
             data: &mut *self.data.add(index),
         }
